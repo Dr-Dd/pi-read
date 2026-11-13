@@ -1,0 +1,13 @@
+{
+  "defaultProvider": "claude-code",
+  "defaultModel": "claude-opus-5-5",
+  "defaultThinkingLevel": "medium",
+  "packages": [
+    "https://github.com/earendil-works/pi-claude-code",
+    { "source": "npm:pi-subagents", "prompts": [], "skills": ["!council-mode"] },
+    { "source": "npm:pi-prompt-template-model", "skills": [] }
+  ],
+  "subagents": {
+    "disableBuiltins": true
+  }
+}
