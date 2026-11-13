@@ -1,7 +1,7 @@
 ---
 description: Ticket on the standard model with a strong-model advisor
-model: claude-code/claude-sonnet-5-5
-thinking: medium
+model: deepseek/deepseek-flash
+thinking: high
 restore: false
 ---
 Work this ticket following the workflow in AGENTS.md.

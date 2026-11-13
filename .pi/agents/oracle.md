@@ -2,8 +2,8 @@
 name: oracle
 description: Advisor that sees the consulting agent's context. Answers one specific question with a verdict; never edits.
 tools: read, grep, find, ls
-model: claude-code/claude-opus-5-5
-thinking: high
+model: deepseek/deepseek-flash
+thinking: max
 defaultContext: fork
 inheritProjectContext: false
 inheritSkills: false

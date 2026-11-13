@@ -2,8 +2,8 @@
 name: scout
 description: Code locator for narrow lookups. Returns file paths, line ranges and short excerpts; never conclusions.
 tools: read, grep, find, ls
-model: claude-code/claude-haiku-5-5
-thinking: off
+model: deepseek/deepseek-flash
+thinking: low
 defaultContext: fresh
 inheritProjectContext: false
 inheritSkills: false

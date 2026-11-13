@@ -1,7 +1,7 @@
 ---
 description: Split a request into parallel tickets and launch them with tickets.sh
-model: claude-code/claude-sonnet-5-5
-thinking: low
+model: deepseek/deepseek-flash
+thinking: high
 restore: false
 ---
 Do not follow the workflow in AGENTS.md and do not edit files. Turn my request below into tickets for ./tickets.sh.
