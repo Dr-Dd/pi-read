@@ -19,7 +19,7 @@ pi-read sits in between. The agent asks for the files it needs; you see the requ
 2. **You approve.** pi shows you the request (files, duration, reason), then sudo asks for your password (see [Password prompt](#password-prompt)). Typing it approves the request; cancelling refuses it.
 3. **The files are copied.** A small root-owned script, `pi-share`, copies the files into `/run/pi-share/`, which lives in RAM. Only your user can read the copies. No real file is changed.
 4. **The agent reads the copies.** The tool tells the agent where each copy is, and it reads them with its normal tools.
-5. **The copies are deleted** when the time is up, or earlier if pi exits first. Both are enforced by a root systemd service that `pi-share` starts for each share, so they work even if pi crashes, and need no second password. A reboot clears the copies too, because `/run` is emptied on every boot.
+5. **The copies are deleted** when the time is up, or earlier if pi exits first. Both are enforced by a root systemd service that `pi-share` starts for each share, so they work even if pi crashes, and need no second password. `pi-share` asks that service when it is due and reports the real deadline, which is a little earlier than "now + duration", since the copying takes time. A reboot clears the copies too, because `/run` is emptied on every boot.
 
 If the agent needs more files later, it asks again, and you approve again.
 

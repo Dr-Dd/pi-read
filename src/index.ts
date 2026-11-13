@@ -14,6 +14,7 @@ import {
 	normalizeRequest,
 	parseShareOutput,
 	type SharedFile,
+	type ShareOutput,
 	type ShareRequest,
 	shareArgs,
 	sudoPrompt,
@@ -107,17 +108,18 @@ export default function piRead(pi: ExtensionAPI): void {
 					const why = result.stderr.trim() || `exit code ${result.code}`;
 					return fail(`The request was refused or failed (${method} prompt):\n${why}`, { method });
 				}
-				let shared: SharedFile[];
+				let output: ShareOutput;
 				try {
-					shared = parseShareOutput(result.stdout);
-					if (shared.length === 0) throw new Error("pi-share reported no copies");
+					output = parseShareOutput(result.stdout);
 				} catch (err) {
 					return fail(`request_root_read: ${(err as Error).message}`, { method });
 				}
-				const expires = new Date(Date.now() + durationSeconds(req.duration) * 1000);
+				// pi-share reports when the cleanup unit will remove the copies. An older installed
+				// helper prints no deadline; fall back to the duration we asked for.
+				const expires = output.expires ?? new Date(Date.now() + durationSeconds(req.duration) * 1000);
 				return {
-					content: [{ type: "text" as const, text: formatResult(shared, expires) }],
-					details: { method, shared, expires: expires.toISOString() },
+					content: [{ type: "text" as const, text: formatResult(output.files, expires) }],
+					details: { method, shared: output.files, expires: expires.toISOString() },
 				};
 			}
 			return fail(

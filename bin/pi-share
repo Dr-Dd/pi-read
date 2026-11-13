@@ -3,7 +3,8 @@
 #
 #   sudo pi-share [--duration DUR] [--pid PID] -- FILE...
 #
-# Prints "<requested path><TAB><copy path>" per file. Errors go to stderr (exit 1), usage errors
+# Prints "expires<TAB><epoch seconds>" (when the cleanup removes the copies), then
+# "<requested path><TAB><copy path>" per file. Errors go to stderr (exit 1), usage errors
 # exit 2. All or nothing: every file is validated before anything is copied.
 #
 # Design: the share tree stays root-owned while root writes it, so root never writes into a path
@@ -245,8 +246,22 @@ copy_files() {
 	done
 }
 
+# unit_expiry UNIT SECONDS STARTED: print the epoch second when UNIT's cleanup removes the copies.
+# systemd counts RuntimeMaxSec from when the unit became active, which is before the copies are
+# made. Ask it for that moment; fall back to STARTED (taken just before the unit was started, so
+# the answer is never later than the real cleanup) when systemd is too old or cannot say.
+unit_expiry() {
+	local unit=$1 seconds=$2 started=$3 active
+	active=$(systemctl show --timestamp=unix --property=ActiveEnterTimestamp --value "${unit}.service" 2>/dev/null || true)
+	if [[ ${active} =~ ^@([1-9][0-9]{0,11})$ ]]; then
+		echo $((BASH_REMATCH[1] + seconds))
+		return 0
+	fi
+	echo $((started + seconds))
+}
+
 main() {
-	local duration=${DEFAULT_DURATION} pid="" file uid gid
+	local duration=${DEFAULT_DURATION} pid="" file uid gid started expires
 	while (($#)); do
 		case $1 in
 		--duration)
@@ -303,6 +318,8 @@ main() {
 	else
 		watch=(sleep infinity)
 	fi
+	# The unit's RuntimeMaxSec starts now, before the copying: remember when we asked for it.
+	started=$(date +%s)
 	if ! systemd-run --quiet --collect --unit="${unit}" \
 		--property=RuntimeMaxSec="${duration}" \
 		--property="ExecStopPost=/usr/bin/rm -rf --one-file-system -- ${dir}" \
@@ -319,12 +336,16 @@ main() {
 		rm -rf --one-file-system -- "${dir}"
 		die "the cleanup service stopped early (duration too short or pid gone); nothing shared"
 	fi
+	# RuntimeMaxSec counts from when the unit became active, which was before the copying above,
+	# so the copies go sooner than "now + duration". Report when the cleanup is really due.
+	expires=$(unit_expiry "${unit}" "${duration}" "${started}")
 	# Last step: hand the finished tree to the user (-h: never follow symlinks).
 	if ! chown -hR "${uid}:${gid}" -- "${dir}"; then
 		systemctl stop "${unit}.service" || rm -rf --one-file-system -- "${dir}"
 		die "could not hand over the copies; nothing shared"
 	fi
 	local i
+	printf 'expires\t%s\n' "${expires}"
 	for i in "${!requested[@]}"; do
 		printf '%s\t%s\n' "${requested[i]}" "${dir}${resolved_files[i]}"
 	done

@@ -37,10 +37,13 @@ test("shareArgs builds --duration D --pid P -- files", () => {
 });
 
 test("parseShareOutput parses tab-separated lines and skips blank lines", () => {
-	assert.deepEqual(parseShareOutput("/a\t/run/pi-share/x/a\n\n/b\t/run/pi-share/x/b\n"), [
-		{ requested: "/a", copy: "/run/pi-share/x/a" },
-		{ requested: "/b", copy: "/run/pi-share/x/b" },
-	]);
+	assert.deepEqual(parseShareOutput("/a\t/run/pi-share/x/a\n\n/b\t/run/pi-share/x/b\n"), {
+		files: [
+			{ requested: "/a", copy: "/run/pi-share/x/a" },
+			{ requested: "/b", copy: "/run/pi-share/x/b" },
+		],
+		expires: undefined,
+	});
 });
 
 test("parseShareOutput throws on a malformed line", () => {

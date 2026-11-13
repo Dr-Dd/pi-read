@@ -18,7 +18,8 @@
 #   as_tester CMD...       run CMD as user tester (uid/gid 1000) through `sudo -n`
 #   share ARGS...          run `sudo -n /mnt/bin/pi-share ARGS...` as tester; sets rc, out, err
 #   make_file PATH TEXT [MODE] [OWNER]   create a file (parents root-owned 0755)
-#   stub_status NAME RC    make a stub exit RC: NAME is systemd-run or systemctl-is-active
+#   stub_status NAME RC    make a stub exit RC: NAME is systemd-run, systemctl-is-active or
+#                          systemctl-show; systemctl-show prints /mnt/stub/systemctl-show.out
 #   share_dirs             print the share dirs under /run/pi-share (one per line)
 #   stub_log NAME          print the arguments the stub was called with (one call per line)
 
@@ -87,6 +88,7 @@ sandbox_setup() {
 	mount -t tmpfs -o mode=0755 tmpfs /run
 
 	# PLACEHOLDER for systemd (none in the sandbox): log the call, exit with the chosen status.
+	# `show` prints /mnt/stub/systemctl-show.out when a test provides one (the unit's timestamps).
 	cat >"${s}/stub/systemd-run" <<-'EOF'
 		#!/bin/sh
 		echo "$*" >>/mnt/log/systemd-run
@@ -97,6 +99,10 @@ sandbox_setup() {
 		echo "$*" >>/mnt/log/systemctl
 		if [ "$1" = is-active ]; then
 			exit "$(cat /mnt/stub/systemctl-is-active.rc 2>/dev/null || echo 0)"
+		fi
+		if [ "$1" = show ]; then
+			cat /mnt/stub/systemctl-show.out 2>/dev/null || true
+			exit "$(cat /mnt/stub/systemctl-show.rc 2>/dev/null || echo 0)"
 		fi
 		exit 0
 	EOF
