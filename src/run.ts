@@ -50,6 +50,8 @@ export function runAskpass(
 /**
  * pi's own terminal. Call with pi's TUI stopped. stdin is the terminal (sudo asks on /dev/tty);
  * stdout and stderr are captured. SIGINT from Ctrl+C reaches pi too, so it is ignored meanwhile.
+ * No abort signal: spawnSync blocks the event loop, so pi cannot react to one while sudo asks.
+ * That costs nothing here: the user is at the prompt, and the command ends when they answer.
  */
 export function runOnTerminal(
 	description: string,
@@ -61,6 +63,7 @@ export function runOnTerminal(
 	process.on("SIGINT", ignore);
 	try {
 		process.stdout.write(`\n${description}\n\n`);
+		// spawnSync, not spawn: the ctx.ui.custom callback around this call cannot await.
 		const result = spawnSync(options.sudo ?? "sudo", sudoArgs(prompt, command), {
 			stdio: ["inherit", "pipe", "pipe"],
 			encoding: "utf8",
