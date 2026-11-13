@@ -3,7 +3,8 @@
   "defaultModel": "claude-opus-5-5",
   "defaultThinkingLevel": "medium",
   "packages": [
-    "https://github.com/earendil-works/pi-claude-code",
+    "../../pi-claude-code-fork",
+    { "source": "https://github.com/earendil-works/pi-claude-code", "extensions": [] },
     { "source": "npm:pi-subagents", "prompts": [], "skills": ["!council-mode"] },
     { "source": "npm:pi-prompt-template-model", "skills": [] }
   ],
