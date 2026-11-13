@@ -12,8 +12,8 @@ setup() {
 		make_file /mnt/data/app/conf "secret value" 0600
 		share -- /mnt/data/app/conf
 		[ "$rc" -eq 0 ]
-		[[ $out =~ ^/mnt/data/app/conf$'"'"'\t'"'"'/run/pi-share/1000-[0-9a-f]{16}/mnt/data/app/conf$ ]]
-		copy=${out#*$'"'"'\t'"'"'}
+		[[ $(printf "%s\n" "$out" | sed -n 2p) =~ ^/mnt/data/app/conf$'"'"'\t'"'"'/run/pi-share/1000-[0-9a-f]{16}/mnt/data/app/conf$ ]]
+		copy=$(printf "%s\n" "$out" | sed -n 2p | cut -f2)
 		[ "$(cat "$copy")" = "secret value" ]
 	'
 	echo "$output"
@@ -25,7 +25,7 @@ setup() {
 		make_file /mnt/data/app/conf "x" 0600
 		share -- /mnt/data/app/conf
 		[ "$rc" -eq 0 ]
-		copy=${out#*$'"'"'\t'"'"'}
+		copy=$(printf "%s\n" "$out" | sed -n 2p | cut -f2)
 		[ "$(stat -c "%u:%g %a" "$copy")" = "1000:1000 400" ]
 		dir=$(share_dirs)
 		[ "$(find "$dir" -type d | wc -l)" -eq 4 ]
@@ -43,10 +43,10 @@ setup() {
 		make_file /mnt/other/c "C"
 		share -- /mnt/data/b /mnt/data/a /mnt/other/c
 		[ "$rc" -eq 0 ]
-		[ "$(printf "%s\n" "$out" | wc -l)" -eq 3 ]
-		[ "$(printf "%s\n" "$out" | cut -f1 | tr "\n" " ")" = "/mnt/data/b /mnt/data/a /mnt/other/c " ]
+		[ "$(printf "%s\n" "$out" | tail -n +2 | wc -l)" -eq 3 ]
+		[ "$(printf "%s\n" "$out" | tail -n +2 | cut -f1 | tr "\n" " ")" = "/mnt/data/b /mnt/data/a /mnt/other/c " ]
 		dir=$(share_dirs)
-		[ "$(printf "%s\n" "$out" | cut -f2 | tr "\n" " ")" = "$dir/mnt/data/b $dir/mnt/data/a $dir/mnt/other/c " ]
+		[ "$(printf "%s\n" "$out" | tail -n +2 | cut -f2 | tr "\n" " ")" = "$dir/mnt/data/b $dir/mnt/data/a $dir/mnt/other/c " ]
 		[ "$(cat "$dir/mnt/data/b" "$dir/mnt/data/a" "$dir/mnt/other/c" | tr -d "\n")" = "BAC" ]
 	'
 	echo "$output"
@@ -61,7 +61,7 @@ setup() {
 		share -- /mnt/links/alias
 		[ "$rc" -eq 0 ]
 		dir=$(share_dirs)
-		[ "$out" = "/mnt/links/alias"$'"'"'\t'"'"'"$dir/mnt/data/real" ]
+		[ "$(printf "%s\n" "$out" | sed -n 2p)" = "/mnt/links/alias"$'"'"'\t'"'"'"$dir/mnt/data/real" ]
 		[ "$(cat "$dir/mnt/data/real")" = "R" ]
 	'
 	echo "$output"

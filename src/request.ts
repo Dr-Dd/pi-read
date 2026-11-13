@@ -2,6 +2,8 @@
 
 export const DEFAULT_DURATION = "15m";
 const DURATION_RE = /^([0-9]{1,6})([smh]?)$/;
+// Epoch seconds: 1-12 digits, so the Date below stays in range.
+const EXPIRY_RE = /^[1-9][0-9]{0,11}$/;
 
 export interface ShareRequest {
 	files: string[];
@@ -12,6 +14,12 @@ export interface ShareRequest {
 export interface SharedFile {
 	requested: string;
 	copy: string;
+}
+
+export interface ShareOutput {
+	files: SharedFile[];
+	/** When the copies are deleted. Missing when the installed pi-share is older than this extension. */
+	expires?: Date;
 }
 
 /** Validate and normalize the tool input. Throws an Error with a message for the model. */
@@ -63,18 +71,31 @@ export function shareArgs(req: ShareRequest, pid: number): string[] {
 	return ["--duration", req.duration, "--pid", String(pid), "--", ...req.files];
 }
 
-/** Parse pi-share's "requested<TAB>copy" lines. Throws on a malformed line. */
-export function parseShareOutput(stdout: string): SharedFile[] {
-	const out: SharedFile[] = [];
+/**
+ * Parse pi-share's output: "requested<TAB>copy" lines and, from a current pi-share, an
+ * "expires<TAB>epoch seconds" line. The expiry is optional so a new extension still works with an
+ * older installed pi-share. Throws on a malformed line and when no copy is reported.
+ */
+export function parseShareOutput(stdout: string): ShareOutput {
+	const files: SharedFile[] = [];
+	let expires: Date | undefined;
 	for (const line of stdout.split("\n")) {
 		if (line.trim() === "") continue;
 		const parts = line.split("\t");
 		if (parts.length !== 2 || !parts[0] || !parts[1]) {
 			throw new Error(`unexpected pi-share output: ${JSON.stringify(line)}`);
 		}
-		out.push({ requested: parts[0], copy: parts[1] });
+		const [key, value] = parts;
+		if (key === "expires") {
+			// A requested path is always absolute, so only the deadline line starts with "expires".
+			if (expires || !EXPIRY_RE.test(value)) throw new Error(`unexpected pi-share output: ${JSON.stringify(line)}`);
+			expires = new Date(Number(value) * 1000);
+			continue;
+		}
+		files.push({ requested: key, copy: value });
 	}
-	return out;
+	if (files.length === 0) throw new Error("pi-share reported no copies");
+	return { files, expires };
 }
 
 /** Text for the model after a successful share. */
