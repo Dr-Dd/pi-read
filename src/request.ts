@@ -2,6 +2,10 @@
 
 export const DEFAULT_DURATION = "15m";
 const DURATION_RE = /^([0-9]{1,6})([smh]?)$/;
+// The same bounds pi-share enforces (MAX_DURATION=3600); checking here avoids a password prompt
+// for a request pi-share would refuse.
+const MIN_DURATION_SECONDS = 1;
+const MAX_DURATION_SECONDS = 3600;
 
 export interface ShareRequest {
 	files: string[];
@@ -28,6 +32,10 @@ export function normalizeRequest(input: { files: string[]; duration?: string; re
 	const duration = input.duration?.trim() || DEFAULT_DURATION;
 	if (!DURATION_RE.test(duration)) {
 		throw new Error(`invalid duration: ${duration} (use e.g. 90, 90s, 15m or 1h)`);
+	}
+	const seconds = durationSeconds(duration);
+	if (seconds < MIN_DURATION_SECONDS || seconds > MAX_DURATION_SECONDS) {
+		throw new Error(`invalid duration: ${duration} (must be between 1s and 1h)`);
 	}
 	// The reason is shown on the terminal: control characters (escape sequences) become spaces.
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: replacing control characters is the point
