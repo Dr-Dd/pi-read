@@ -97,7 +97,7 @@ in_script() {
 		export SUDO_UID=1000 SUDO_GID=1000
 		main -- /mnt/data/a /mnt/data/b >/mnt/log/out
 		[ "$(wc -l <"$calls")" -eq 1 ]
-		[ "$(cut -f1 /mnt/log/out | tr "\n" " ")" = "/mnt/data/a /mnt/data/b " ]
+		[ "$(tail -n +2 /mnt/log/out | cut -f1 | tr "\n" " ")" = "/mnt/data/a /mnt/data/b " ]
 	'
 	echo "$output"
 	[ "$status" -eq 0 ]
