@@ -52,11 +52,14 @@ Durations are written the way `sleep` takes them: `90` or `90s` for seconds, `15
 
 Some files are effectively passwords. `pi-share` refuses them even if you approve them:
 
-- password hashes: `/etc/shadow`, `/etc/gshadow` and their backups
+- password hashes: `/etc/shadow`, `/etc/gshadow`, `/etc/security/opasswd` and their backups
 - SSH host private keys: `/etc/ssh/ssh_host_*_key`
+- TLS private keys: `/etc/ssl/private`, `/etc/letsencrypt/archive`, `/etc/letsencrypt/live`
+- other service secrets: `/etc/krb5.keytab`, `/etc/ipsec.secrets`, `/etc/ppp/*-secrets`
 - root's home folder: `/root`
 - stored credentials and disk keys: `/etc/credstore`, `/etc/credstore.encrypted`, `/etc/cryptsetup-keys.d`, `/var/lib/systemd/credential.secret`
 - network secrets: `/etc/wireguard`, `/etc/NetworkManager/system-connections`, `/var/lib/iwd`, `/var/lib/bluetooth`
+- directory service and virtualisation state: `/var/lib/samba/private`, `/var/lib/sss`, `/etc/libvirt/secrets`
 - memory contents: `/var/lib/systemd/coredump`, `/swapfile` and swap devices
 - `/var/lib/docker`
 
