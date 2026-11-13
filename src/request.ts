@@ -7,6 +7,22 @@ const DURATION_RE = /^([0-9]{1,6})([smh]?)$/;
 const MIN_DURATION_SECONDS = 1;
 const MAX_DURATION_SECONDS = 3600;
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+const CONTROL_CHAR = /[\x00-\x1f\x7f-\x9f]/u;
+/** Unicode format characters (Cf): bidi overrides and isolates, directional marks, zero-width marks and
+ * joiners, BOM, soft hyphen. They are invisible but change how the text around them is displayed. */
+const INVISIBLE_CHAR = /\p{Cf}/u;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control and invisible characters is the point
+const UNSAFE_RUN = /[\x00-\x1f\x7f-\x9f\p{Cf}]+/gu;
+
+/** JSON-quoted text with unsafe characters spelled out, so a message cannot itself hide anything.
+ * JSON escaping already covers C0; the rest (Cf, DEL, C1) becomes a \u{...} escape. */
+function quote(s: string): string {
+	return JSON.stringify(s).replace(UNSAFE_RUN, (run) =>
+		[...run].map((c) => `\\u{${(c.codePointAt(0) ?? 0).toString(16)}}`).join(""),
+	);
+}
+
 export interface ShareRequest {
 	files: string[];
 	duration: string;
@@ -23,23 +39,24 @@ export function normalizeRequest(input: { files: string[]; duration?: string; re
 	const files: string[] = [];
 	for (const raw of input.files) {
 		const file = raw.startsWith("@") ? raw.slice(1) : raw;
-		// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
-		if (/[\x00-\x1f\x7f-\x9f]/.test(file)) throw new Error(`invalid path (control character): ${JSON.stringify(file)}`);
+		if (CONTROL_CHAR.test(file)) throw new Error(`invalid path (control character): ${quote(file)}`);
+		// Invisible characters would let the approval screen show a different path than pi-share copies.
+		if (INVISIBLE_CHAR.test(file)) throw new Error(`invalid path (invisible character): ${quote(file)}`);
 		if (!file.startsWith("/")) throw new Error(`not an absolute path: ${file}`);
 		if (!files.includes(file)) files.push(file);
 	}
 	if (files.length === 0) throw new Error("no files requested");
 	const duration = input.duration?.trim() || DEFAULT_DURATION;
 	if (!DURATION_RE.test(duration)) {
-		throw new Error(`invalid duration: ${duration} (use e.g. 90, 90s, 15m or 1h)`);
+		throw new Error(`invalid duration: ${quote(duration)} (use e.g. 90, 90s, 15m or 1h)`);
 	}
 	const seconds = durationSeconds(duration);
 	if (seconds < MIN_DURATION_SECONDS || seconds > MAX_DURATION_SECONDS) {
 		throw new Error(`invalid duration: ${duration} (must be between 1s and 1h)`);
 	}
-	// The reason is shown on the terminal: control characters (escape sequences) become spaces.
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: replacing control characters is the point
-	const reason = input.reason.replace(/[\x00-\x1f\x7f-\x9f]+/g, " ").trim();
+	// The reason is shown on the terminal: control characters (escape sequences) and invisible ones
+	// (bidi overrides, zero-width marks) become spaces, so words do not glue together.
+	const reason = input.reason.replace(UNSAFE_RUN, " ").trim();
 	if (!reason) throw new Error("a reason is required");
 	return { files, duration, reason };
 }
