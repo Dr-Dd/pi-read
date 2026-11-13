@@ -1,14 +1,285 @@
 #!/usr/bin/env bash
 # pi-share: root-owned helper that copies approved files into /run/pi-share/. See README.md.
-# Skeleton: does nothing yet.
+#
+#   sudo pi-share [--duration DUR] [--pid PID] -- FILE...
+#
+# Prints "<requested path><TAB><copy path>" per file. Errors go to stderr (exit 1), usage errors
+# exit 2. All or nothing: every file is validated before anything is copied.
+#
+# Design: the share tree stays root-owned while root writes it, so root never writes into a path
+# the user controls. It is handed to the user (chown -h) as the very last step.
 #
 # Tests source this file to call its functions; main only runs when it is executed.
 
+# shellcheck disable=SC2310,SC2312 # every call site handles failure explicitly (|| return, || die)
 set -euo pipefail
 
-main() {
-	echo "pi-share: not implemented" >&2
+readonly SHARE_ROOT=/run/pi-share
+readonly DEFAULT_DURATION=900
+readonly MAX_DURATION=3600
+readonly MAX_BYTES=52428800
+
+# Prefixes (the path itself or anything below it) that are never shared.
+readonly DENIED_PREFIXES=(
+	/root
+	/etc/credstore
+	/etc/credstore.encrypted
+	/etc/cryptsetup-keys.d
+	/var/lib/systemd/credential.secret
+	/etc/wireguard
+	/etc/NetworkManager/system-connections
+	/var/lib/iwd
+	/var/lib/bluetooth
+	/var/lib/systemd/coredump
+	/swapfile
+	/var/lib/docker
+	/proc
+	/sys
+	/dev
+)
+
+die() {
+	echo "pi-share: $*" >&2
+	exit 1
+}
+
+usage() {
+	echo "usage: pi-share [--duration DUR] [--pid PID] -- FILE..." >&2
+	exit 2
+}
+
+# parse_duration DUR: print seconds for N, Ns, Nm or Nh (1 s up to the 1 h maximum).
+parse_duration() {
+	local spec=$1 number unit seconds
+	if [[ ! ${spec} =~ ^([0-9]{1,6})([smh]?)$ ]]; then
+		echo "pi-share: invalid duration: ${spec}" >&2
+		return 1
+	fi
+	number=$((10#${BASH_REMATCH[1]}))
+	unit=${BASH_REMATCH[2]}
+	case ${unit} in
+	m) seconds=$((number * 60)) ;;
+	h) seconds=$((number * 3600)) ;;
+	*) seconds=${number} ;;
+	esac
+	if ((seconds < 1 || seconds > MAX_DURATION)); then
+		echo "pi-share: duration must be between 1s and 1h: ${spec}" >&2
+		return 1
+	fi
+	echo "${seconds}"
+}
+
+# validate_pid PID: succeed for a positive integer naming a live process.
+validate_pid() {
+	local pid=$1
+	if [[ ! ${pid} =~ ^[1-9][0-9]{0,8}$ ]]; then
+		echo "pi-share: invalid pid: ${pid}" >&2
+		return 1
+	fi
+	if [[ ! -d /proc/${pid} ]]; then
+		echo "pi-share: no such process: ${pid}" >&2
+		return 1
+	fi
+}
+
+# validate_path PATH: succeed for an absolute path.
+validate_path() {
+	if [[ $1 != /* ]]; then
+		echo "pi-share: not an absolute path: $1" >&2
+		return 1
+	fi
+}
+
+# is_denied PATH: succeed when PATH is on the never-share list (by name).
+is_denied() {
+	local path=$1 prefix
+	case ${path} in
+	/etc/shadow* | /etc/gshadow* | /etc/ssh/ssh_host_*_key) return 0 ;;
+	*) ;;
+	esac
+	for prefix in "${DENIED_PREFIXES[@]}"; do
+		if [[ ${path} == "${prefix}" || ${path} == "${prefix}"/* ]]; then
+			return 0
+		fi
+	done
 	return 1
+}
+
+# is_swap_device PATH: succeed when PATH is listed in /proc/swaps.
+is_swap_device() {
+	local name rest
+	while read -r name rest; do
+		[[ ${name} == "$1" ]] && return 0
+	done < <(tail -n +2 /proc/swaps 2>/dev/null || true)
+	return 1
+}
+
+# denied_identities: print "dev:inode" of the existing never-share files, to catch hard links.
+denied_identities() {
+	local file name rest
+	for file in /etc/shadow* /etc/gshadow* /etc/ssh/ssh_host_*_key /swapfile /var/lib/systemd/credential.secret; do
+		[[ -f ${file} ]] && stat -c '%d:%i' -- "${file}"
+	done
+	while read -r name rest; do
+		[[ -f ${name} ]] && stat -c '%d:%i' -- "${name}"
+	done < <(tail -n +2 /proc/swaps 2>/dev/null || true)
+	find /root /etc/credstore /etc/credstore.encrypted /etc/cryptsetup-keys.d /etc/wireguard \
+		/etc/NetworkManager/system-connections /var/lib/iwd /var/lib/bluetooth \
+		/var/lib/systemd/coredump /var/lib/docker \
+		-xdev -type f -printf '%D:%i\n' 2>/dev/null || true
+	return 0
+}
+
+# user_can_write PATH UID GID: succeed unless the user provably cannot alter PATH. Fails closed:
+# owned by the user (who could chmod it), or anything but a clean "n" answer from setpriv.
+user_can_write() {
+	local owner answer
+	owner=$(stat -c '%u' -- "$1") || return 0
+	[[ ${owner} == "$2" ]] && return 0
+	# shellcheck disable=SC2016 # the $1 is for the inner sh
+	answer=$(setpriv --reuid "$2" --regid "$3" --init-groups sh -c 'if test -w "$1"; then echo w; else echo n; fi' _ "$1" 2>/dev/null) || return 0
+	[[ ${answer} == n ]] && return 1
+	return 0
+}
+
+# check_file FILE UID GID: validate one file; print its resolved path and size ("path<TAB>size").
+check_file() {
+	local file=$1 uid=$2 gid=$3 resolved dir identity
+	validate_path "${file}" || return 1
+	if is_denied "${file}"; then
+		echo "pi-share: refused (never shared): ${file}" >&2
+		return 1
+	fi
+	resolved=$(realpath -e -- "${file}") || {
+		echo "pi-share: cannot resolve: ${file}" >&2
+		return 1
+	}
+	if is_denied "${resolved}" || is_swap_device "${resolved}"; then
+		echo "pi-share: refused (never shared): ${file} -> ${resolved}" >&2
+		return 1
+	fi
+	if [[ ! -f ${resolved} ]]; then
+		echo "pi-share: not a regular file: ${file}" >&2
+		return 1
+	fi
+	identity=$(stat -c '%d:%i' -- "${resolved}")
+	if denied_identities | grep -qxF -- "${identity}"; then
+		echo "pi-share: refused (never shared, linked): ${file}" >&2
+		return 1
+	fi
+	# The user must not be able to alter the file or any directory above it.
+	dir=${resolved}
+	while :; do
+		if user_can_write "${dir}" "${uid}" "${gid}"; then
+			echo "pi-share: refused (writable by you): ${file} (${dir})" >&2
+			return 1
+		fi
+		[[ ${dir} == / ]] && break
+		dir=$(dirname -- "${dir}")
+	done
+	printf '%s\t%s\n' "${resolved}" "$(stat -c '%s' -- "${resolved}")"
+}
+
+# copy_files DIR RESOLVED...: copy each file below DIR (root-owned, 0400) within the size limit.
+copy_files() {
+	local dir=$1 src dst remaining=${MAX_BYTES} copied
+	shift
+	for src in "$@"; do
+		dst=${dir}${src}
+		[[ -e ${dst} ]] && continue
+		(umask 077 && mkdir -p -- "$(dirname -- "${dst}")") || return 1
+		(umask 077 && head -c "$((remaining + 1))" -- "${src}" >"${dst}") || return 1
+		copied=$(stat -c '%s' -- "${dst}") || return 1
+		if ((copied > remaining)); then
+			echo "pi-share: size limit exceeded (50 MB): ${src}" >&2
+			return 1
+		fi
+		remaining=$((remaining - copied))
+		chmod 0400 -- "${dst}" || return 1
+	done
+}
+
+main() {
+	local duration=${DEFAULT_DURATION} pid="" file uid gid
+	while (($#)); do
+		case $1 in
+		--duration)
+			(($# >= 2)) || usage
+			duration=$(parse_duration "$2") || exit 2
+			shift 2
+			;;
+		--pid)
+			(($# >= 2)) || usage
+			pid=$2
+			shift 2
+			;;
+		--)
+			shift
+			break
+			;;
+		*) usage ;;
+		esac
+	done
+	(($# >= 1)) || usage
+
+	((EUID == 0)) || die "must run as root (through sudo)"
+	uid=${SUDO_UID:-}
+	gid=${SUDO_GID:-}
+	[[ ${uid} =~ ^[1-9][0-9]{0,9}$ && ${gid} =~ ^[1-9][0-9]{0,9}$ ]] ||
+		die "SUDO_UID and SUDO_GID must name a non-root user"
+	if [[ -n ${pid} ]]; then
+		validate_pid "${pid}" || exit 1
+	fi
+
+	# Validate everything first.
+	local line total=0 size resolved_files=() requested=()
+	for file in "$@"; do
+		line=$(check_file "${file}" "${uid}" "${gid}") || exit 1
+		resolved_files+=("${line%%$'\t'*}")
+		requested+=("${file}")
+		size=${line##*$'\t'}
+		total=$((total + size))
+	done
+	((total <= MAX_BYTES)) || die "files total ${total} bytes; the limit is ${MAX_BYTES} (50 MB)"
+
+	# Create the share dir, then the cleanup unit, then copy.
+	install -d -m 0711 -o root -g root -- "${SHARE_ROOT}"
+	[[ $(stat -c '%u %a' -- "${SHARE_ROOT}") == "0 711" ]] || die "${SHARE_ROOT} is not root-owned 0711"
+	local id dir unit watch
+	id="${uid}-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+	dir=${SHARE_ROOT}/${id}
+	unit=pi-share-${id}
+	mkdir -m 0700 -- "${dir}"
+	if [[ -n ${pid} ]]; then
+		watch=(tail --pid="${pid}" -f /dev/null)
+	else
+		watch=(sleep infinity)
+	fi
+	if ! systemd-run --quiet --collect --unit="${unit}" \
+		--property=RuntimeMaxSec="${duration}" \
+		--property="ExecStopPost=/usr/bin/rm -rf --one-file-system -- ${dir}" \
+		-- "${watch[@]}"; then
+		rm -rf --one-file-system -- "${dir}"
+		die "could not start the cleanup service"
+	fi
+	if ! copy_files "${dir}" "${resolved_files[@]}"; then
+		systemctl stop "${unit}.service" || rm -rf --one-file-system -- "${dir}"
+		die "copy failed; nothing shared"
+	fi
+	# The cleanup unit must still be running, or nothing would ever remove the copies.
+	if ! systemctl is-active --quiet "${unit}.service"; then
+		rm -rf --one-file-system -- "${dir}"
+		die "the cleanup service stopped early (duration too short or pid gone); nothing shared"
+	fi
+	# Last step: hand the finished tree to the user (-h: never follow symlinks).
+	if ! chown -hR "${uid}:${gid}" -- "${dir}"; then
+		systemctl stop "${unit}.service" || rm -rf --one-file-system -- "${dir}"
+		die "could not hand over the copies; nothing shared"
+	fi
+	local i
+	for i in "${!requested[@]}"; do
+		printf '%s\t%s\n' "${requested[i]}" "${dir}${resolved_files[i]}"
+	done
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
