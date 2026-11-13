@@ -82,10 +82,22 @@ validate_pid() {
 	fi
 }
 
-# validate_path PATH: succeed for an absolute path.
+# has_control_char PATH: succeed when PATH holds a control character (tab, newline, escape, ...).
+# Such a path would break pi-share's tab-separated output (and its own "path<TAB>size" protocol).
+has_control_char() {
+	# shellcheck disable=SC2034 # LC_ALL is read by the pattern match below
+	local LC_ALL=C
+	[[ $1 == *[[:cntrl:]]* ]]
+}
+
+# validate_path PATH: succeed for an absolute path without control characters.
 validate_path() {
 	if [[ $1 != /* ]]; then
 		echo "pi-share: not an absolute path: $1" >&2
+		return 1
+	fi
+	if has_control_char "$1"; then
+		printf 'pi-share: invalid path (control character): %q\n' "$1" >&2
 		return 1
 	fi
 }
@@ -154,6 +166,10 @@ check_file() {
 		echo "pi-share: cannot resolve: ${file}" >&2
 		return 1
 	}
+	if has_control_char "${resolved}"; then
+		printf 'pi-share: refused (control character): %q -> %q\n' "${file}" "${resolved}" >&2
+		return 1
+	fi
 	if is_denied "${resolved}" || is_swap_device "${resolved}"; then
 		echo "pi-share: refused (never shared): ${file} -> ${resolved}" >&2
 		return 1

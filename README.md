@@ -60,7 +60,7 @@ Some files are effectively passwords. `pi-share` refuses them even if you approv
 - memory contents: `/var/lib/systemd/coredump`, `/swapfile` and swap devices
 - `/var/lib/docker`
 
-It also refuses `/proc`, `/sys` and `/dev`, anywhere your own user can write (such as `/home` and `/tmp`), and links that lead to any of the above.
+It also refuses `/proc`, `/sys` and `/dev`, anywhere your own user can write (such as `/home` and `/tmp`), and links that lead to any of the above. Paths with control characters (a tab, a newline) are refused too: `pi-share` prints one file per line as `requested<TAB>copy`, so it could not pass such a path on.
 
 ## Installation
 
