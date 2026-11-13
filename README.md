@@ -74,6 +74,15 @@ cd pi-read
 
 Requirements: Linux with systemd, sudo and pi. Optional: tmux for popups, an askpass program for graphical prompts.
 
+## Development
+
+Requirements: Node.js 22.19 or newer, plus `shellcheck` and `shfmt` from your system's package manager. Everything else is pinned in `package-lock.json`:
+
+```sh
+npm ci
+./check.sh   # typecheck, Biome, shellcheck, shfmt, node:test and bats tests
+```
+
 ## What it protects against, and what it doesn't
 
 **It does stop:**

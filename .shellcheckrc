@@ -1,0 +1,2 @@
+# Strict: pi-share runs as root. Opt-in checks on; disable individual ones here with a reason.
+enable=all

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# pi-share: root-owned helper that copies approved files into /run/pi-share/. See README.md.
+# Skeleton: does nothing yet.
+#
+# Tests source this file to call its functions; main only runs when it is executed.
+
+set -euo pipefail
+
+main() {
+	echo "pi-share: not implemented" >&2
+	return 1
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+	main "$@"
+fi

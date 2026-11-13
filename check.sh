@@ -50,9 +50,15 @@ guarded_files_set() {
 }
 
 step guarded-files guarded_files_set
-step test not_configured test
-step typecheck not_configured typecheck
-step lint not_configured lint
+# Shell scripts of this project (not the template's own scripts).
+shell_files=(bin/pi-share) # add install.sh once it exists
+
+step typecheck npm run --silent typecheck
+step lint-ts npm run --silent lint
+step lint-sh shellcheck --severity=style "${shell_files[@]}"
+step format-sh shfmt -d "${shell_files[@]}"
+step test-ts npm run --silent test
+step test-sh npm run --silent test:sh
 
 if ((${#failed[@]})); then
 	echo "check: FAILED (${failed[*]})"

@@ -24,9 +24,4 @@
 
 set -euo pipefail
 
-not_configured() {
-	echo "worktree-setup.sh is not configured for this project" >&2
-	return 1
-}
-
-not_configured
+npm ci --prefer-offline --no-audit --no-fund
