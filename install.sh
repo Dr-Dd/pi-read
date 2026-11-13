@@ -10,8 +10,8 @@
 # shellcheck disable=SC2310,SC2312 # every call site handles failure explicitly (|| die)
 set -euo pipefail
 
-# Placeholder: the extension in src/ must call pi-share at this same path. Keep both in step
-# until the path is shared from one place.
+# The extension in src/ calls pi-share at this same path (PI_SHARE_PATH in src/config.ts);
+# tests/share-path.test.ts fails when the two differ.
 readonly PI_SHARE_DEST=/usr/local/bin/pi-share
 readonly SUDOERS_DEST=/etc/sudoers.d/pi-read
 
