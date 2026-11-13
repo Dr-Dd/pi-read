@@ -130,6 +130,15 @@ denied_identities() {
 	return 0
 }
 
+# is_denied_identity IDENTITY DENIED: succeed when IDENTITY is one of the lines of DENIED
+# (the output of denied_identities). Whole-line match, so 1:2 never matches 1:20, and neither an
+# empty IDENTITY nor an empty DENIED ever matches.
+is_denied_identity() {
+	local identity=$1 denied=${2-}
+	[[ -n ${identity} ]] || return 1
+	grep -qxF -- "${identity}" <<<"${denied}"
+}
+
 # user_can_write PATH UID GID: succeed unless the user provably cannot alter PATH. Fails closed:
 # owned by the user (who could chmod it), or anything but a clean "n" answer from setpriv.
 user_can_write() {
@@ -142,9 +151,10 @@ user_can_write() {
 	return 0
 }
 
-# check_file FILE UID GID: validate one file; print its resolved path and size ("path<TAB>size").
+# check_file FILE UID GID DENIED: validate one file; print its resolved path and size
+# ("path<TAB>size"). DENIED is the precomputed output of denied_identities.
 check_file() {
-	local file=$1 uid=$2 gid=$3 resolved dir identity
+	local file=$1 uid=$2 gid=$3 denied=$4 resolved dir identity
 	validate_path "${file}" || return 1
 	if is_denied "${file}"; then
 		echo "pi-share: refused (never shared): ${file}" >&2
@@ -163,7 +173,7 @@ check_file() {
 		return 1
 	fi
 	identity=$(stat -c '%d:%i' -- "${resolved}")
-	if denied_identities | grep -qxF -- "${identity}"; then
+	if is_denied_identity "${identity}" "${denied}"; then
 		echo "pi-share: refused (never shared, linked): ${file}" >&2
 		return 1
 	fi
@@ -231,10 +241,12 @@ main() {
 		validate_pid "${pid}" || exit 1
 	fi
 
-	# Validate everything first.
-	local line total=0 size resolved_files=() requested=()
+	# Validate everything first. The never-share identities are collected once for all files:
+	# that is a find over /var/lib/docker and friends, too slow to repeat per file.
+	local line total=0 size resolved_files=() requested=() denied
+	denied=$(denied_identities)
 	for file in "$@"; do
-		line=$(check_file "${file}" "${uid}" "${gid}") || exit 1
+		line=$(check_file "${file}" "${uid}" "${gid}" "${denied}") || exit 1
 		resolved_files+=("${line%%$'\t'*}")
 		requested+=("${file}")
 		size=${line##*$'\t'}
