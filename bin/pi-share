@@ -26,6 +26,14 @@ readonly DENIED_PREFIXES=(
 	/etc/credstore.encrypted
 	/etc/cryptsetup-keys.d
 	/var/lib/systemd/credential.secret
+	/etc/ssl/private
+	/etc/letsencrypt/archive
+	/etc/letsencrypt/live
+	/etc/krb5.keytab
+	/etc/ipsec.secrets
+	/var/lib/samba/private
+	/var/lib/sss
+	/etc/libvirt/secrets
 	/etc/wireguard
 	/etc/NetworkManager/system-connections
 	/var/lib/iwd
@@ -94,7 +102,8 @@ validate_path() {
 is_denied() {
 	local path=$1 prefix
 	case ${path} in
-	/etc/shadow* | /etc/gshadow* | /etc/ssh/ssh_host_*_key) return 0 ;;
+	/etc/shadow* | /etc/gshadow* | /etc/security/opasswd* | /etc/ssh/ssh_host_*_key) return 0 ;;
+	/etc/ppp/*-secrets) return 0 ;;
 	*) ;;
 	esac
 	for prefix in "${DENIED_PREFIXES[@]}"; do
@@ -114,19 +123,30 @@ is_swap_device() {
 	return 1
 }
 
+# denied_scan_roots: print the DENIED_PREFIXES worth walking for hard links. The virtual trees
+# hold no regular files to link to, and /swapfile is found through /proc/swaps.
+denied_scan_roots() {
+	local prefix
+	for prefix in "${DENIED_PREFIXES[@]}"; do
+		case ${prefix} in
+		/proc | /sys | /dev | /swapfile) continue ;;
+		*) printf '%s\n' "${prefix}" ;;
+		esac
+	done
+}
+
 # denied_identities: print "dev:inode" of the existing never-share files, to catch hard links.
 denied_identities() {
-	local file name rest
-	for file in /etc/shadow* /etc/gshadow* /etc/ssh/ssh_host_*_key /swapfile /var/lib/systemd/credential.secret; do
+	local file name rest roots=()
+	for file in /etc/shadow* /etc/gshadow* /etc/security/opasswd* /etc/ssh/ssh_host_*_key \
+		/etc/ppp/*-secrets /swapfile /var/lib/systemd/credential.secret; do
 		[[ -f ${file} ]] && stat -c '%d:%i' -- "${file}"
 	done
 	while read -r name rest; do
 		[[ -f ${name} ]] && stat -c '%d:%i' -- "${name}"
 	done < <(tail -n +2 /proc/swaps 2>/dev/null || true)
-	find /root /etc/credstore /etc/credstore.encrypted /etc/cryptsetup-keys.d /etc/wireguard \
-		/etc/NetworkManager/system-connections /var/lib/iwd /var/lib/bluetooth \
-		/var/lib/systemd/coredump /var/lib/docker \
-		-xdev -type f -printf '%D:%i\n' 2>/dev/null || true
+	mapfile -t roots < <(denied_scan_roots)
+	find "${roots[@]}" -xdev -type f -printf '%D:%i\n' 2>/dev/null || true
 	return 0
 }
 
