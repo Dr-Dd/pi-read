@@ -51,7 +51,7 @@ guarded_files_set() {
 
 step guarded-files guarded_files_set
 # Shell scripts of this project (not the template's own scripts).
-shell_files=(bin/pi-share) # add install.sh once it exists
+shell_files=(bin/pi-share install.sh)
 
 step typecheck npm run --silent typecheck
 step lint-ts npm run --silent lint
