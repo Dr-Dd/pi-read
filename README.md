@@ -180,7 +180,7 @@ pi remove git:github.com/Dr-Dd/pi-read
 
 `--uninstall` keeps your never-share list; `--uninstall --purge` removes that too.
 
-Requirements: Linux with systemd, sudo, [gitleaks](https://github.com/gitleaks/gitleaks) 8.19 or newer,
+Requirements: Linux with systemd, sudo, [gitleaks](https://github.com/gitleaks/gitleaks) 8.21.3 or newer,
 and pi. gitleaks has to be root-owned and not writable by your user (a distribution package is fine);
 `install.sh` refuses to install without it, and `pi-share` refuses one it cannot trust. Optional: tmux
 3.2 or newer for popups, an askpass program for graphical prompts.

@@ -118,7 +118,7 @@ require_gitleaks() {
 		done
 	fi
 	if [[ -z ${path} ]]; then
-		echo "pi-share: ${name} not found in ${PATH}; install gitleaks (8.19 or newer, root-owned)" >&2
+		echo "pi-share: ${name} not found in ${PATH}; install gitleaks (8.21.3 or newer, root-owned)" >&2
 		return 1
 	fi
 	path=$(realpath -e -- "${path}") || {
