@@ -10,7 +10,7 @@ setup() {
 	export LOG
 	# Each stub logs "name args..." and fails when FAIL_<name> matches its arguments.
 	local cmd
-	for cmd in pi sudo visudo systemctl systemd-run; do
+	for cmd in pi sudo visudo systemctl systemd-run gitleaks; do
 		make_stub "$cmd"
 	done
 }

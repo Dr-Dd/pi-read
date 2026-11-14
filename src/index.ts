@@ -101,6 +101,7 @@ export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): v
 			"Use request_root_read only when a file you need is unreadable as the current user; request only the files you need, with a short reason.",
 			"Prefer short request_root_read durations (the default 15m is usually enough; the maximum is 1h).",
 			"After request_root_read succeeds, read the returned copy paths with your normal read tools; ask again for a fresh copy.",
+			"The copies are filtered: a line gitleaks flags reads [REDACTED] instead of its content, and a request whose filtering fails shares nothing.",
 		],
 		parameters,
 		executionMode: "sequential",

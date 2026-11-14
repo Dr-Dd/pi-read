@@ -17,13 +17,33 @@ pi-read sits in between. The agent asks for the files it needs; you see the requ
 
 1. **The agent asks.** It calls the `request_root_read` tool with the files it wants, how long it needs them, and why.
 2. **You approve.** pi shows you the request (files, duration, reason), then sudo asks for your password (see [Password prompt](#password-prompt)). Typing it approves the request; cancelling refuses it.
-3. **The files are copied.** A small root-owned script, `pi-share`, copies the files into `/run/pi-share/`, which lives in RAM. Only your user can read the copies. No real file is changed.
+3. **The files are copied and filtered.** A small root-owned script, `pi-share`, copies the files into `/run/pi-share/`, which lives in RAM, and runs [gitleaks](https://github.com/gitleaks/gitleaks) over the copies before anyone can read them: every line gitleaks flags is replaced with `[REDACTED]`, so its secrets never reach the agent (see [Filtering](#filtering)). Only your user can read the copies. No real file is changed.
 4. **The agent reads the copies.** The tool tells the agent where each copy is, and it reads them with its normal tools.
 5. **The copies are deleted** when the time is up, or earlier if pi exits first. Both are enforced by a root systemd service that `pi-share` starts for each share, so they work even if pi crashes, and need no second password. `pi-share` asks that service when it is due and reports the real deadline, which is a little earlier than "now + duration", since the copying takes time. A reboot clears the copies too, because `/run` is emptied on every boot.
 
 If the agent needs more files later, it asks again, and you approve again.
 
 The copies are snapshots, not the live files. For a fresh copy, the agent asks again.
+
+### Filtering
+
+The copies are not raw snapshots: `pi-share` runs gitleaks over them and replaces every line gitleaks
+flags with `[REDACTED]` before the agent can read them. If gitleaks is missing, cannot be trusted, or
+fails, nothing is shared and the agent is told why.
+
+- gitleaks must be root-owned and not writable by group or other, and `pi-share` looks for it on its
+own `PATH` (`/usr/local/bin`, then the system directories), never yours.
+- The scan runs over the copies under a number, not under their real path: gitleaks' default
+  configuration skips paths such as `node_modules/` or `package-lock.json`, and a copy keeping its
+  path would never be scanned.
+- gitleaks cannot rewrite files, so `pi-share` does the redaction from its report. Only lines gitleaks
+  reports are touched, and the file keeps its line count; the rest of a flagged line goes with the
+  secret, so a structured file (JSON, YAML) can break where it was redacted.
+- Nothing you control can steer the scan: `GITLEAKS_CONFIG`, a `gitleaks.toml` and a `.gitleaksignore`
+  are ignored, and a `gitleaks:allow` comment inside a file does not opt that line out.
+
+Detection is best effort. A secret no rule matches, one inside an archive, and one in a file gitleaks
+could not read all reach the copy: see [What it protects against](#what-it-protects-against-and-what-it-doesnt).
 
 ### Password prompt
 
@@ -83,7 +103,10 @@ cd pi-read
 
 After updating pi-read (a `git pull`), run `./install.sh` again. pi uses the extension straight from this folder, but `pi-share` is a root-owned copy, so it stays at the old version until then. The extension notices the difference and refuses requests, telling the agent to ask you for this.
 
-Requirements: Linux with systemd, sudo and pi. Optional: tmux 3.2 or newer for popups, an askpass program for graphical prompts.
+Requirements: Linux with systemd, sudo, [gitleaks](https://github.com/gitleaks/gitleaks) 8.19 or newer,
+and pi. gitleaks has to be root-owned and not writable by your user (a distribution package is fine);
+`install.sh` refuses to install without it, and `pi-share` refuses one it cannot trust. Optional: tmux
+3.2 or newer for popups, an askpass program for graphical prompts.
 
 ## Development
 
@@ -99,6 +122,7 @@ npm ci
 **It does stop:**
 
 - the agent getting anything but read-only copies of the files you approved;
+- the agent reading a secret gitleaks recognises: the line it is on is replaced with `[REDACTED]`;
 - the agent reading the files on the never-share list, even if you approve them;
 - other users on the machine reading the copies;
 - shares lasting longer than you allowed, or than the hard limit;
@@ -110,6 +134,9 @@ npm ci
 - **A tampered pi.** pi and its extensions live in your home folder, so a program running as you could modify them. A tampered pi could show you one request and send another, or capture your password while sudo is asking on its terminal. Your sudo password unlocks everything, not only `pi-share`.
 - **The agent copying what it reads** somewhere else, for example into your home folder.
 - **Your model provider seeing the files.** Anything the agent reads goes into the conversation. This is why the never-share list exists. Only approve what you would be happy to send.
+- **Secrets gitleaks does not recognise.** The filter is only as good as gitleaks' rules. A secret no
+  rule matches, one inside an archive, or one in a file gitleaks skipped (it warns instead of failing
+  when it cannot read a file) still reaches the copy, and a redacted line keeps no other context.
 - **Secrets missing from the list.** The list blocks known secrets; you still approve every file.
 
 ## Roadmap
