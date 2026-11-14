@@ -136,35 +136,29 @@ Paths with control characters (a tab, a newline) are refused too: `pi-share` pri
 
 ## Installation
 
-pi-read installs in two steps: pi installs the extension from git, pinned to a release tag, then
-`install.sh` from pi's copy installs the system files.
+pi-read installs in two steps: pi installs the extension from git, then `install.sh` from pi's copy installs the system files.
 
 ```sh
-pi install git:github.com/Dr-Dd/pi-read@v0.1.1
+pi install git:github.com/Dr-Dd/pi-read
 ~/.pi/agent/git/github.com/Dr-Dd/pi-read/install.sh
 ```
 
 Or as one line (it honours `PI_CODING_AGENT_DIR` if you set it):
 
 ```sh
-pi install git:github.com/Dr-Dd/pi-read@v0.1.1 && "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/git/github.com/Dr-Dd/pi-read/install.sh"
+pi install git:github.com/Dr-Dd/pi-read && "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/git/github.com/Dr-Dd/pi-read/install.sh"
 ```
 
-`pi install` clones the repository into pi's package folder and checks out the tag; no clone of your
-own is needed. `install.sh` then asks for your sudo password and installs `pi-share`, its sudoers rule
+`pi install` clones the repository into pi's package folder; no clone of your own is needed. `install.sh` then asks for your sudo password and installs `pi-share`, its sudoers rule
 and the [never-share list](#files-that-are-never-shared). Read it before you run it (it is in pi's
 copy, at the path above): it changes system files. It never runs `pi` itself. It installs the
 never-share list only when none is installed yet; your edits are never overwritten (it tells you when
 your list differs from the shipped defaults).
 
-**Pin the tag.** Without `@<tag>`, `pi update` moves the package to the newest commit on the default
-branch, and with it the code that shows you sudo requests and runs `pi-share`, without you choosing
-to. pi never moves a pinned tag.
-
 ### Updating
 
-Run the two installation commands again, with the new tag in place of `v0.1.1`.
-pi replaces the pinned entry and checks out the new tag. `pi-share` is a root-owned copy, so it stays
+Update the extension with `pi update --extensions` (or `pi update git:github.com/Dr-Dd/pi-read`), then
+run `~/.pi/agent/git/github.com/Dr-Dd/pi-read/install.sh` again. `pi-share` is a root-owned copy, so it stays
 at the old version until `install.sh` runs again. The extension notices the difference and refuses
 requests, telling the agent to ask you for this.
 

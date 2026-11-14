@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # install.sh: install (or remove) pi-read's system files. See README.md.
 #
-# The pi extension is installed separately, by pi itself, pinned to a tag:
-#   pi install git:github.com/Dr-Dd/pi-read@<tag>
+# The pi extension is installed separately, by pi itself, from git:
+#   pi install git:github.com/Dr-Dd/pi-read
 # This script does only the system step, from pi's copy of the package (or a local clone):
 #
 #   ./install.sh                      install pi-share, its sudoers rule and, when none is
@@ -12,7 +12,7 @@
 #   ./install.sh --uninstall --purge  remove the never-share list too
 #
 # It never runs pi: run from pi's copy, `pi install <this folder>` would add a second, local-path
-# package entry next to the git one. Run it again after every tag change.
+# package entry next to the git one. Run it again after every update of the extension.
 #
 # Run it as your normal user; it asks for your sudo password for the system files.
 # Tests source this file to call its functions; main only runs when it is executed.
@@ -29,7 +29,7 @@ readonly SUDOERS_DEST=/etc/sudoers.d/pi-read
 readonly NEVER_SHARE_DIR=/usr/local/etc/pi-read
 readonly NEVER_SHARE_DEST=${NEVER_SHARE_DIR}/never-share.list
 # The pi package source, without a ref (pi matches packages by repository, not by ref).
-# tests/install-pinned.test.ts checks README.md installs this source pinned to the release tag.
+# tests/install-source.test.ts checks README.md installs this source as it is.
 readonly PI_SOURCE=git:github.com/Dr-Dd/pi-read
 
 die() {
@@ -116,8 +116,8 @@ do_install() {
 	echo "  pi-share      ${PI_SHARE_DEST}"
 	echo "  never-share   ${NEVER_SHARE_DEST} (edit with: sudoedit ${NEVER_SHARE_DEST})"
 	echo "  sudoers rule  ${SUDOERS_DEST}"
-	echo "The pi extension is installed separately: pi install ${PI_SOURCE}@<tag>"
-	echo "Run ${dir}/install.sh again after every tag change."
+	echo "The pi extension is installed separately: pi install ${PI_SOURCE}"
+	echo "Run ${dir}/install.sh again after every pi update of pi-read."
 	echo "Remove the system files with: ${dir}/install.sh --uninstall"
 }
 
