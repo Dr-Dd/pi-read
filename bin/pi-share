@@ -79,13 +79,27 @@ validate_pid() {
 
 # require_gitleaks NAME: print the path of the gitleaks to run, or explain why it cannot be run.
 # It runs as root, so it must be root-owned and not writable by group or other, like every other
-# program this script executes. NAME may be a path, which is how the tests hand their own binary.
+# program this script executes. PATH is searched here rather than with `command -v`, which reports a
+# file that exists but cannot be executed as found. NAME may be a path, which is how the tests hand
+# their own binary.
 require_gitleaks() {
-	local name=$1 path owner mode
-	path=$(command -v -- "${name}" 2>/dev/null) || {
+	local name=$1 path="" dir owner mode
+	local -a dirs
+	if [[ ${name} == */* ]]; then
+		path=${name}
+	else
+		IFS=: read -r -a dirs <<<"${PATH}"
+		for dir in "${dirs[@]}"; do
+			if [[ -f ${dir}/${name} && -x ${dir}/${name} ]]; then
+				path=${dir}/${name}
+				break
+			fi
+		done
+	fi
+	if [[ -z ${path} ]]; then
 		echo "pi-share: ${name} not found in ${PATH}; install gitleaks (8.19 or newer, root-owned)" >&2
 		return 1
-	}
+	fi
 	path=$(realpath -e -- "${path}") || {
 		echo "pi-share: cannot resolve ${name}" >&2
 		return 1

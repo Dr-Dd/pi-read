@@ -73,6 +73,10 @@ sandbox_setup() {
 
 	install -o 0 -g 0 -m 0755 -- "${pi_share}" "${s}/bin/pi-share"
 	defaults=$(dirname -- "${pi_share}")/../never-share.defaults
+	# One tmpfs over all of /usr/local, first: the gitleaks stub goes in /usr/local/bin and the
+	# never-share list in /usr/local/etc, each in its own mount inside it.
+	mount -t tmpfs -o mode=0755 tmpfs /usr/local
+	mkdir -m 0755 /usr/local/bin /usr/local/etc
 	mount -t tmpfs -o mode=0755 tmpfs /usr/local/etc
 	install -d -o 0 -g 0 -m 0755 -- /usr/local/etc/pi-read
 	install -o 0 -g 0 -m 0644 -- "${defaults}" /usr/local/etc/pi-read/never-share.list
@@ -144,8 +148,17 @@ sandbox_setup() {
 		exit "$rc"
 	EOF
 	chmod 0755 "${s}/stub/gitleaks"
-	mount -t tmpfs -o mode=0755 tmpfs /usr/local
-	mkdir -m 0755 /usr/local/bin
+	# A gitleaks the host has in a system directory would be found by pi-share too: mask it with an
+	# empty file that is not executable, so the stub is the only gitleaks there is in here.
+	local mask dir masked=""
+	for dir in /usr/sbin /usr/bin /sbin /bin; do
+		[ -f "${dir}/gitleaks" ] || continue
+		mask=$(realpath -e -- "${dir}/gitleaks") || continue
+		[[ ${masked} == *":${mask}:"* ]] && continue
+		masked="${masked}:${mask}:"
+		install -o 0 -g 0 -m 0644 -- /dev/null "${s}/stub/empty"
+		mount --bind "${s}/stub/empty" "${mask}"
+	done
 	install -o 0 -g 0 -m 0755 -- "${s}/stub/gitleaks" /usr/local/bin/gitleaks
 	set +e
 }
