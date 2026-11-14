@@ -30,6 +30,8 @@ readonly DENIED_PREFIXES=(
 	/etc/credstore.encrypted
 	/etc/cryptsetup-keys.d
 	/var/lib/systemd/credential.secret
+	/run/credentials
+	/etc/pacman.d/gnupg
 	/etc/ssl/private
 	/etc/letsencrypt/archive
 	/etc/letsencrypt/live
@@ -40,6 +42,8 @@ readonly DENIED_PREFIXES=(
 	/etc/libvirt/secrets
 	/etc/wireguard
 	/etc/NetworkManager/system-connections
+	/run/NetworkManager/system-connections
+	/etc/wpa_supplicant
 	/var/lib/iwd
 	/var/lib/bluetooth
 	/var/lib/systemd/coredump
@@ -190,7 +194,7 @@ user_can_write() {
 # check_file FILE UID GID DENIED: validate one file; print its resolved path and size
 # ("path<TAB>size"). DENIED is the precomputed output of denied_identities.
 check_file() {
-	local file=$1 uid=$2 gid=$3 denied=$4 resolved dir identity
+	local file=$1 uid=$2 gid=$3 denied=$4 resolved dir identity size
 	validate_path "${file}" || return 1
 	if is_denied "${file}"; then
 		echo "pi-share: refused (never shared): ${file}" >&2
@@ -218,7 +222,10 @@ check_file() {
 		echo "pi-share: not a regular file: ${file}" >&2
 		return 1
 	fi
-	identity=$(stat -c '%d:%i' -- "${resolved}")
+	identity=$(stat -c '%d:%i' -- "${resolved}") || {
+		echo "pi-share: cannot examine: ${file}" >&2
+		return 1
+	}
 	if is_denied_identity "${identity}" "${denied}"; then
 		echo "pi-share: refused (never shared, linked): ${file}" >&2
 		return 1
@@ -231,9 +238,13 @@ check_file() {
 			return 1
 		fi
 		[[ ${dir} == / ]] && break
-		dir=$(dirname -- "${dir}")
+		dir=$(dirname -- "${dir}") || return 1
 	done
-	printf '%s\t%s\n' "${resolved}" "$(stat -c '%s' -- "${resolved}")"
+	size=$(stat -c '%s' -- "${resolved}") || {
+		echo "pi-share: cannot examine: ${file}" >&2
+		return 1
+	}
+	printf '%s\t%s\n' "${resolved}" "${size}"
 }
 
 # copy_files DIR RESOLVED...: copy each file below DIR (root-owned, 0400) within the size limit.

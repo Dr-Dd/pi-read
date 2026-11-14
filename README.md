@@ -58,8 +58,9 @@ Some files are effectively passwords. `pi-share` refuses them even if you approv
 - TLS private keys: `/etc/ssl/private`, `/etc/letsencrypt/archive`, `/etc/letsencrypt/live`
 - other service secrets: `/etc/krb5.keytab`, `/etc/ipsec.secrets`, `/etc/ppp/*-secrets`
 - root's home folder: `/root`
-- stored credentials and disk keys: `/etc/credstore`, `/etc/credstore.encrypted`, `/etc/cryptsetup-keys.d`, `/var/lib/systemd/credential.secret`
-- network secrets: `/etc/wireguard`, `/etc/NetworkManager/system-connections`, `/var/lib/iwd`, `/var/lib/bluetooth`
+- stored credentials and disk keys: `/etc/credstore`, `/etc/credstore.encrypted`, `/etc/cryptsetup-keys.d`, `/var/lib/systemd/credential.secret`, `/run/credentials`
+- network secrets: `/etc/wireguard`, `/etc/NetworkManager/system-connections`, `/run/NetworkManager/system-connections`, `/etc/wpa_supplicant`, `/var/lib/iwd`, `/var/lib/bluetooth`
+- the package signing keyring: `/etc/pacman.d/gnupg`
 - directory service and virtualisation state: `/var/lib/samba/private`, `/var/lib/sss`, `/etc/libvirt/secrets`
 - memory contents: `/var/lib/systemd/coredump`, `/swapfile` and swap devices
 - `/var/lib/docker`
