@@ -1,6 +1,6 @@
 ---
 description: Quick change on the standard model; no SPEC.md, review only on request
-model: deepseek/deepseek-flash
+model: claude-code/claude-sonnet-5-5
 thinking: medium
 restore: false
 ---

@@ -1,6 +1,6 @@
 ---
 description: Split a request into parallel tickets and launch them with tickets.sh
-model: deepseek/deepseek-flash
+model: claude-code/claude-sonnet-5-5
 thinking: medium
 restore: false
 ---
