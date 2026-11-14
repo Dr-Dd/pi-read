@@ -59,23 +59,16 @@ run_install() {
 	[ "$output" = "Defaults!/usr/local/bin/pi-share timestamp_timeout=0" ]
 }
 
-@test "install: pi install, then sudo installs pi-share and the sudoers file, then visudo -c" {
+@test "install: sudo installs pi-share, the list check and the sudoers file, then visudo -c" {
 	run_install
 	[ "$status" -eq 0 ]
 	run grep -nE '^(pi|sudo) ' "$LOG"
-	[[ ${lines[0]} == "1:pi install $REPO" ]]
-	[[ ${lines[1]} == *"sudo install -m 0755 -o root -g root -- $REPO/bin/pi-share /usr/local/bin/pi-share" ]]
-	[[ ${lines[2]} == *"sudo test -e /usr/local/etc/pi-read/never-share.list -o -L /usr/local/etc/pi-read/never-share.list" ]]
-	[[ ${lines[3]} == *"sudo cmp -s -- $REPO/never-share.defaults /usr/local/etc/pi-read/never-share.list" ]]
-	[[ ${lines[4]} == *"sudo install -m 0440 -o root -g root -- "*" /etc/sudoers.d/pi-read" ]]
-	[[ ${lines[5]} == *"sudo visudo -cq" ]]
-	[ "${#lines[@]}" -eq 6 ]
-}
-
-@test "install: a failing pi install never calls sudo" {
-	FAIL_pi='install*' run_install
-	[ "$status" -ne 0 ]
-	! grep -q '^sudo ' "$LOG"
+	[[ ${lines[0]} == *"sudo install -m 0755 -o root -g root -- $REPO/bin/pi-share /usr/local/bin/pi-share" ]]
+	[[ ${lines[1]} == *"sudo test -e /usr/local/etc/pi-read/never-share.list -o -L /usr/local/etc/pi-read/never-share.list" ]]
+	[[ ${lines[2]} == *"sudo cmp -s -- $REPO/never-share.defaults /usr/local/etc/pi-read/never-share.list" ]]
+	[[ ${lines[3]} == *"sudo install -m 0440 -o root -g root -- "*" /etc/sudoers.d/pi-read" ]]
+	[[ ${lines[4]} == *"sudo visudo -cq" ]]
+	[ "${#lines[@]}" -eq 5 ]
 }
 
 @test "install: a rule rejected by visudo -cf never installs the sudoers file" {
@@ -93,22 +86,21 @@ run_install() {
 
 @test "a missing required command fails before anything runs, naming it" {
 	[ "$(id -u)" -ne 0 ] || skip "running as root"
-	rm "$STUBS/pi"
+	rm "$STUBS/sudo"
 	local cmd
 	for cmd in dirname uname; do
 		ln -s "$(command -v "$cmd")" "$STUBS/$cmd"
 	done
 	run env PATH="$STUBS" "$BASH" "$INSTALL"
 	[ "$status" -eq 1 ]
-	[[ $output == *"required command not found: pi"* ]]
+	[[ $output == *"required command not found: sudo"* ]]
 	[ ! -s "$LOG" ]
 }
 
-@test "--uninstall: sudo removes both files, then pi remove" {
+@test "--uninstall: sudo removes both files" {
 	run_install --uninstall
 	[ "$status" -eq 0 ]
 	run cat "$LOG"
 	[ "${lines[0]}" = "sudo rm -f -- /usr/local/bin/pi-share /etc/sudoers.d/pi-read" ]
-	[ "${lines[1]}" = "pi remove $REPO" ]
-	[ "${#lines[@]}" -eq 2 ]
+	[ "${#lines[@]}" -eq 1 ]
 }

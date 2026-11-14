@@ -88,15 +88,14 @@ run_install() {
 	[[ $output == *"--uninstall --purge"* ]]
 }
 
-@test "--uninstall --purge removes the list and its directory before pi remove" {
+@test "--uninstall --purge removes the list and its directory" {
 	run_install --uninstall --purge
 	[ "$status" -eq 0 ]
 	run cat "$LOG"
 	[ "${lines[0]}" = "sudo rm -f -- /usr/local/bin/pi-share /etc/sudoers.d/pi-read" ]
 	[ "${lines[1]}" = "sudo rm -f -- $LIST" ]
 	[ "${lines[2]}" = "sudo rmdir -- /usr/local/etc/pi-read" ]
-	[ "${lines[3]}" = "pi remove $REPO" ]
-	[ "${#lines[@]}" -eq 4 ]
+	[ "${#lines[@]}" -eq 3 ]
 }
 
 @test "an unknown second option exits 2 with usage" {

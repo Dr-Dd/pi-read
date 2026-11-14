@@ -119,8 +119,8 @@ sudoedit /usr/local/etc/pi-read/never-share.list
 Changes apply from the next request; there is nothing to re-run. Each line is one absolute path, and it refuses that path and everything below it. `*`, `?` and `[...]` work as in the shell, except that `*` also crosses `/`. Blank lines and lines starting with `#` are ignored. `install.sh` creates the file from the shipped defaults in [`never-share.defaults`](never-share.defaults) when none is installed. Don't edit `never-share.defaults`: nothing reads it after that. To compare your list with the defaults, or go back to them:
 
 ```sh
-sudo diff -u never-share.defaults /usr/local/etc/pi-read/never-share.list
-./install.sh --reset-never-share
+sudo diff -u ~/.pi/agent/git/github.com/Dr-Dd/pi-read/never-share.defaults /usr/local/etc/pi-read/never-share.list
+~/.pi/agent/git/github.com/Dr-Dd/pi-read/install.sh --reset-never-share
 ```
 
 `pi-share` refuses every request when the list is missing, has no entries, has an entry that is not an absolute path or holds a control character, is a link, is not owned by root, or is writable by you (directly or through a folder above it).
@@ -133,15 +133,49 @@ Paths with control characters (a tab, a newline) are refused too: `pi-share` pri
 
 ## Installation
 
+pi-read installs in two steps: pi installs the extension from git, pinned to a release tag, then
+`install.sh` from pi's copy installs the system files.
+
 ```sh
-git clone https://github.com/Dr-Dd/pi-read.git
-cd pi-read
-./install.sh
+pi install git:github.com/Dr-Dd/pi-read@v0.1.0
+~/.pi/agent/git/github.com/Dr-Dd/pi-read/install.sh
 ```
 
-`install.sh` installs everything: the pi extension (through `pi install`) and, after asking for your sudo password, `pi-share`, its sudoers rule and the [never-share list](#files-that-are-never-shared). Read it before you run it: it changes system files. It installs the never-share list only when none is installed yet; your edits are never overwritten (it tells you when your list differs from the shipped defaults). `./install.sh --uninstall` removes everything again except your never-share list; `./install.sh --uninstall --purge` removes that too.
+Or as one line (it honours `PI_CODING_AGENT_DIR` if you set it):
 
-After updating pi-read (a `git pull`), run `./install.sh` again. pi uses the extension straight from this folder, but `pi-share` is a root-owned copy, so it stays at the old version until then. The extension notices the difference and refuses requests, telling the agent to ask you for this.
+```sh
+pi install git:github.com/Dr-Dd/pi-read@v0.1.0 && "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/git/github.com/Dr-Dd/pi-read/install.sh"
+```
+
+`pi install` clones the repository into pi's package folder and checks out the tag; no clone of your
+own is needed. `install.sh` then asks for your sudo password and installs `pi-share`, its sudoers rule
+and the [never-share list](#files-that-are-never-shared). Read it before you run it (it is in pi's
+copy, at the path above): it changes system files. It never runs `pi` itself. It installs the
+never-share list only when none is installed yet; your edits are never overwritten (it tells you when
+your list differs from the shipped defaults).
+
+**Pin the tag.** Without `@<tag>`, `pi update` moves the package to the newest commit on the default
+branch, and with it the code that shows you sudo requests and runs `pi-share`, without you choosing
+to. pi never moves a pinned tag.
+
+### Updating
+
+Run the two installation commands again, with the new tag in place of `v0.1.0`.
+pi replaces the pinned entry and checks out the new tag. `pi-share` is a root-owned copy, so it stays
+at the old version until `install.sh` runs again. The extension notices the difference and refuses
+requests, telling the agent to ask you for this.
+
+### Uninstalling
+
+Remove the system files first, then the extension (`pi remove` deletes the copy that holds
+`install.sh`):
+
+```sh
+~/.pi/agent/git/github.com/Dr-Dd/pi-read/install.sh --uninstall
+pi remove git:github.com/Dr-Dd/pi-read
+```
+
+`--uninstall` keeps your never-share list; `--uninstall --purge` removes that too.
 
 Requirements: Linux with systemd, sudo, [gitleaks](https://github.com/gitleaks/gitleaks) 8.19 or newer,
 and pi. gitleaks has to be root-owned and not writable by your user (a distribution package is fine);
@@ -156,6 +190,9 @@ Requirements: Node.js 22.19 or newer, plus `shellcheck` and `shfmt` from your sy
 npm ci
 ./check.sh   # typecheck, Biome, shellcheck, shfmt, node:test and bats tests
 ```
+
+To try a local clone, load it with `pi -e .` (or install it with `pi install ./pi-read` in place of
+the git source, not next to it), then run `./install.sh` from the clone.
 
 ## What it protects against, and what it doesn't
 

@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# install.sh: install (or remove) pi-read. See README.md.
+# install.sh: install (or remove) pi-read's system files. See README.md.
 #
-#   ./install.sh                      install the pi extension, pi-share, its sudoers rule and,
-#                                     when none is installed yet, the default never-share list
+# The pi extension is installed separately, by pi itself, pinned to a tag:
+#   pi install git:github.com/Dr-Dd/pi-read@<tag>
+# This script does only the system step, from pi's copy of the package (or a local clone):
+#
+#   ./install.sh                      install pi-share, its sudoers rule and, when none is
+#                                     installed yet, the default never-share list
 #   ./install.sh --reset-never-share  replace the never-share list with the shipped defaults
 #   ./install.sh --uninstall          remove all of them but the never-share list
 #   ./install.sh --uninstall --purge  remove the never-share list too
+#
+# It never runs pi: run from pi's copy, `pi install <this folder>` would add a second, local-path
+# package entry next to the git one. Run it again after every tag change.
 #
 # Run it as your normal user; it asks for your sudo password for the system files.
 # Tests source this file to call its functions; main only runs when it is executed.
@@ -21,6 +28,9 @@ readonly SUDOERS_DEST=/etc/sudoers.d/pi-read
 # in src/config.ts); tests/never-share-path.test.ts fails when they differ. Root edits it in place.
 readonly NEVER_SHARE_DIR=/usr/local/etc/pi-read
 readonly NEVER_SHARE_DEST=${NEVER_SHARE_DIR}/never-share.list
+# The pi package source, without a ref (pi matches packages by repository, not by ref).
+# tests/install-pinned.test.ts checks README.md installs this source pinned to the release tag.
+readonly PI_SOURCE=git:github.com/Dr-Dd/pi-read
 
 die() {
 	echo "install.sh: $*" >&2
@@ -83,10 +93,7 @@ ensure_never_share() {
 do_install() {
 	local dir tmp
 	dir=$(repo_dir)
-	preflight pi sudo visudo systemctl systemd-run gitleaks
-
-	# First, so a failure leaves the system files untouched.
-	pi install "${dir}" || die "pi install failed"
+	preflight sudo visudo systemctl systemd-run gitleaks
 
 	tmp=$(mktemp)
 	# shellcheck disable=SC2064 # expand tmp now
@@ -105,12 +112,13 @@ do_install() {
 		die "sudo's configuration did not validate with ${SUDOERS_DEST}; removed it"
 	fi
 
-	echo "Installed pi-read:"
-	echo "  pi extension  ${dir} (keep this folder where it is)"
+	echo "Installed pi-read's system files:"
 	echo "  pi-share      ${PI_SHARE_DEST}"
 	echo "  never-share   ${NEVER_SHARE_DEST} (edit with: sudoedit ${NEVER_SHARE_DEST})"
 	echo "  sudoers rule  ${SUDOERS_DEST}"
-	echo "Remove everything with: ${dir}/install.sh --uninstall"
+	echo "The pi extension is installed separately: pi install ${PI_SOURCE}@<tag>"
+	echo "Run ${dir}/install.sh again after every tag change."
+	echo "Remove the system files with: ${dir}/install.sh --uninstall"
 }
 
 do_reset_never_share() {
@@ -126,7 +134,7 @@ do_reset_never_share() {
 do_uninstall() {
 	local dir purge=${1-}
 	dir=$(repo_dir)
-	preflight pi sudo
+	preflight sudo
 	# Running shares expire on their own: their cleanup service does not use pi-share.
 	echo "Removing ${PI_SHARE_DEST} and ${SUDOERS_DEST} (needs sudo)"
 	sudo rm -f -- "${PI_SHARE_DEST}" "${SUDOERS_DEST}" || die "could not remove the system files"
@@ -135,11 +143,11 @@ do_uninstall() {
 		sudo rm -f -- "${NEVER_SHARE_DEST}" || die "could not remove ${NEVER_SHARE_DEST}"
 		sudo rmdir -- "${NEVER_SHARE_DIR}" 2>/dev/null || true
 	fi
-	pi remove "${dir}" || die "pi remove failed"
-	echo "Uninstalled pi-read."
+	echo "Removed pi-read's system files."
 	if [[ ${purge} != purge ]]; then
 		echo "Kept your never-share list ${NEVER_SHARE_DEST}; remove it with: ${dir}/install.sh --uninstall --purge"
 	fi
+	echo "Remove the pi extension with: pi remove ${PI_SOURCE}"
 }
 
 main() {
