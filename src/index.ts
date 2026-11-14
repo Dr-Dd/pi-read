@@ -11,6 +11,7 @@ import {
 	describeRequest,
 	durationSeconds,
 	formatResult,
+	MAX_REASON_LENGTH,
 	normalizeRequest,
 	parseShareOutput,
 	type SharedFile,
@@ -38,7 +39,9 @@ const parameters = Type.Object({
 			description: "How long the copies last, like sleep takes it: 90, 90s, 15m, 1h. Default 15m, max 1h",
 		}),
 	),
-	reason: Type.String({ description: "Why you need the files; shown to the user" }),
+	reason: Type.String({
+		description: `Why you need the files, in at most ${MAX_REASON_LENGTH} characters; shown to the user`,
+	}),
 });
 
 function fail(text: string, details: Details = {}) {

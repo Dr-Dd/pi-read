@@ -45,6 +45,7 @@ sudo asks every time: pi-read sets `timestamp_timeout=0` for `pi-share`, so no c
 | Longest share | 60 minutes (`1h`). Built into `pi-share`; nothing the agent asks for can raise it |
 | Default share | 15 minutes (`15m`) |
 | Size per share | 50 MB, since the copies use RAM |
+| Reason | 200 characters, on one line, so it cannot push the file list off the approval screen |
 
 Durations are written the way `sleep` takes them: `90` or `90s` for seconds, `15m` for minutes, `1h` for hours.
 

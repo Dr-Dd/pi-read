@@ -6,6 +6,8 @@ const DURATION_RE = /^([0-9]{1,6})([smh]?)$/;
 // for a request pi-share would refuse.
 const MIN_DURATION_SECONDS = 1;
 const MAX_DURATION_SECONDS = 3600;
+/** Longest reason, in characters. A longer one could scroll the file list off the approval screen. */
+export const MAX_REASON_LENGTH = 200;
 // Epoch seconds: 1-12 digits, so the Date below stays in range.
 const EXPIRY_RE = /^[1-9][0-9]{0,11}$/;
 
@@ -63,9 +65,14 @@ export function normalizeRequest(input: { files: string[]; duration?: string; re
 		throw new Error(`invalid duration: ${duration} (must be between 1s and 1h)`);
 	}
 	// The reason is shown on the terminal: control characters (escape sequences) and invisible ones
-	// (bidi overrides, zero-width marks) become spaces, so words do not glue together.
-	const reason = input.reason.replace(UNSAFE_RUN, " ").trim();
+	// (bidi overrides, zero-width marks) become spaces, so words do not glue together. Runs of
+	// whitespace collapse to one space, so a reason cannot pad the screen or start a new line.
+	const reason = input.reason.replace(UNSAFE_RUN, " ").replace(/\s+/gu, " ").trim();
 	if (!reason) throw new Error("a reason is required");
+	const reasonLength = [...reason].length;
+	if (reasonLength > MAX_REASON_LENGTH) {
+		throw new Error(`reason too long: ${reasonLength} characters (the maximum is ${MAX_REASON_LENGTH})`);
+	}
 	return { files, duration, reason };
 }
 
