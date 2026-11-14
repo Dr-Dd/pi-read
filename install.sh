@@ -83,7 +83,7 @@ ensure_never_share() {
 do_install() {
 	local dir tmp
 	dir=$(repo_dir)
-	preflight pi sudo visudo systemctl systemd-run
+	preflight pi sudo visudo systemctl systemd-run gitleaks
 
 	# First, so a failure leaves the system files untouched.
 	pi install "${dir}" || die "pi install failed"

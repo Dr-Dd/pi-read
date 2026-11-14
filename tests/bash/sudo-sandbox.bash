@@ -9,6 +9,10 @@
 #   - bind-mounts sandbox /etc/passwd, /etc/group, /etc/sudoers, /etc/sudo.conf and
 #     /etc/pam.d/sudo (pam_permit: no password) and an empty /etc/sudoers.d;
 #   - mounts a fresh tmpfs on /run, so /run/pi-share starts out absent;
+#   - mount -t tmpfs on /usr/local with a root-owned gitleaks stub at /usr/local/bin/gitleaks: it
+#     logs each call and the names in the directory it is given, prints /mnt/stub/gitleaks.out with
+#     "@SCAN@" replaced by that directory, prints /mnt/stub/gitleaks.err to stderr, and exits with
+#     /mnt/stub/gitleaks.rc, else 3 when it printed something and 0 when it did not;
 #   - bind-mounts placeholder stubs over /usr/bin/systemd-run and /usr/bin/systemctl;
 #   - installs pi-share root-owned 0755 at /mnt/bin/pi-share;
 #   - mounts a tmpfs on /usr/local/etc and installs the repo's never-share.defaults root-owned 0644
@@ -20,10 +24,12 @@
 #   as_tester CMD...       run CMD as user tester (uid/gid 1000) through `sudo -n`
 #   share ARGS...          run `sudo -n /mnt/bin/pi-share ARGS...` as tester; sets rc, out, err
 #   make_file PATH TEXT [MODE] [OWNER]   create a file (parents root-owned 0755)
-#   stub_status NAME RC    make a stub exit RC: NAME is systemd-run, systemctl-is-active or
-#                          systemctl-show; systemctl-show prints /mnt/stub/systemctl-show.out
+#   stub_status NAME RC    make a stub exit RC: NAME is systemd-run, systemctl-is-active,
+#                          systemctl-show or gitleaks; systemctl-show prints
+#                          /mnt/stub/systemctl-show.out
 #   share_dirs             print the share dirs under /run/pi-share (one per line)
-#   stub_log NAME          print the arguments the stub was called with (one call per line)
+#   stub_log NAME          print what a stub logged: its arguments (one call per line) or, for
+#                          gitleaks-scan, the names in each directory it was given
 
 SANDBOX_HELPER=${BASH_SOURCE[0]}
 readonly TESTER_UID=1000
@@ -115,6 +121,32 @@ sandbox_setup() {
 	chmod 0755 "${s}/stub/systemd-run" "${s}/stub/systemctl"
 	mount --bind "${s}/stub/systemd-run" /usr/bin/systemd-run
 	mount --bind "${s}/stub/systemctl" /usr/bin/systemctl
+
+	# PLACEHOLDER for gitleaks (the sandbox has none). It reports what the test described in
+	# /mnt/stub/gitleaks.out, so a test can put a finding on any line of a staged copy.
+	cat >"${s}/stub/gitleaks" <<-'EOF'
+		#!/bin/sh
+		echo "$*" >>/mnt/log/gitleaks
+		for target in "$@"; do :; done
+		ls -1A -- "$target" 2>/dev/null >>/mnt/log/gitleaks-scan
+		if [ -s /mnt/stub/gitleaks.out ]; then
+			sed "s|@SCAN@|$target|g" /mnt/stub/gitleaks.out
+		fi
+		if [ -s /mnt/stub/gitleaks.err ]; then
+			cat /mnt/stub/gitleaks.err >&2
+		fi
+		rc=0
+		if [ -f /mnt/stub/gitleaks.rc ]; then
+			rc=$(cat /mnt/stub/gitleaks.rc)
+		elif [ -s /mnt/stub/gitleaks.out ]; then
+			rc=3
+		fi
+		exit "$rc"
+	EOF
+	chmod 0755 "${s}/stub/gitleaks"
+	mount -t tmpfs -o mode=0755 tmpfs /usr/local
+	mkdir -m 0755 /usr/local/bin
+	install -o 0 -g 0 -m 0755 -- "${s}/stub/gitleaks" /usr/local/bin/gitleaks
 	set +e
 }
 
