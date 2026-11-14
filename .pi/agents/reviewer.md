@@ -2,8 +2,8 @@
 name: reviewer
 description: Fresh-context correctness reviewer. Checks a diff against SPEC.md; read-only.
 tools: read, grep, find, ls
-model: deepseek/deepseek-flash
-thinking: max
+model: claude-code/claude-opus-5-5
+thinking: high
 defaultContext: fresh
 inheritProjectContext: false
 inheritSkills: false

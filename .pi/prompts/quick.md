@@ -1,7 +1,7 @@
 ---
 description: Quick change on the standard model; no SPEC.md, review only on request
 model: deepseek/deepseek-flash
-thinking: high
+thinking: medium
 restore: false
 ---
 

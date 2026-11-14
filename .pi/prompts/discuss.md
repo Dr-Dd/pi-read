@@ -1,7 +1,7 @@
 ---
 description: Discuss choices for the current ticket (no build/test/review workflow)
-model: deepseek/deepseek-flash
-thinking: max
+model: claude-code/claude-opus-5-5
+thinking: high
 restore: false
 ---
 This is a discussion, not a ticket. Do not follow the numbered workflow in AGENTS.md (Plan, Build, Review, Fix, Finish). In particular:

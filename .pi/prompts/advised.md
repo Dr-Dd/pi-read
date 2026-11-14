@@ -1,7 +1,7 @@
 ---
 description: Ticket on the standard model with a strong-model advisor
 model: deepseek/deepseek-flash
-thinking: high
+thinking: medium
 restore: false
 ---
 Work this ticket following the workflow in AGENTS.md.

@@ -1,7 +1,7 @@
 {
-  "defaultProvider": "deepseek",
-  "defaultModel": "deepseek-flash",
-  "defaultThinkingLevel": "max",
+  "defaultProvider": "claude-code",
+  "defaultModel": "claude-opus-5-5",
+  "defaultThinkingLevel": "high",
   "packages": [
     "git:github.com/Dr-Dd/pi-claude-code@c9c824dac1cdf8271a6ed9a2be76429cb34569eb",
     { "source": "npm:pi-subagents", "prompts": [], "skills": ["!council-mode"] },
