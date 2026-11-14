@@ -137,14 +137,14 @@ pi-read installs in two steps: pi installs the extension from git, pinned to a r
 `install.sh` from pi's copy installs the system files.
 
 ```sh
-pi install git:github.com/Dr-Dd/pi-read@v0.1.0
+pi install git:github.com/Dr-Dd/pi-read@v0.1.1
 ~/.pi/agent/git/github.com/Dr-Dd/pi-read/install.sh
 ```
 
 Or as one line (it honours `PI_CODING_AGENT_DIR` if you set it):
 
 ```sh
-pi install git:github.com/Dr-Dd/pi-read@v0.1.0 && "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/git/github.com/Dr-Dd/pi-read/install.sh"
+pi install git:github.com/Dr-Dd/pi-read@v0.1.1 && "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/git/github.com/Dr-Dd/pi-read/install.sh"
 ```
 
 `pi install` clones the repository into pi's package folder and checks out the tag; no clone of your
@@ -160,7 +160,7 @@ to. pi never moves a pinned tag.
 
 ### Updating
 
-Run the two installation commands again, with the new tag in place of `v0.1.0`.
+Run the two installation commands again, with the new tag in place of `v0.1.1`.
 pi replaces the pinned entry and checks out the new tag. `pi-share` is a root-owned copy, so it stays
 at the old version until `install.sh` runs again. The extension notices the difference and refuses
 requests, telling the agent to ask you for this.
