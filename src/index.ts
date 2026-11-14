@@ -14,6 +14,7 @@ import {
 	formatResult,
 	MAX_REASON_LENGTH,
 	normalizeRequest,
+	PASSWORD_QUESTION,
 	parseShareOutput,
 	type SharedFile,
 	type ShareOutput,
@@ -56,15 +57,16 @@ async function runWith(
 	ctx: ExtensionToolContext,
 	signal: AbortSignal | undefined,
 ): Promise<RunResult | undefined> {
+	// The terminal and the popup print the request once, then sudo asks only the question (also on
+	// a retry after a wrong password). The askpass dialog has to carry the request in its prompt.
 	const description = describeRequest(req);
-	const prompt = sudoPrompt(req);
 	switch (method) {
 		case "tui":
 			return ctx.ui.custom<RunResult>((tui, _theme, _kb, done) => {
 				tui.stop();
 				let result: RunResult;
 				try {
-					result = runOnTerminal(description, prompt, command);
+					result = runOnTerminal(description, PASSWORD_QUESTION, command);
 				} finally {
 					tui.start();
 					tui.requestRender(true);
@@ -73,10 +75,10 @@ async function runWith(
 				return { render: () => [], invalidate: () => {} };
 			});
 		case "tmux":
-			return runTmuxPopup(description, prompt, command);
+			return runTmuxPopup(description, PASSWORD_QUESTION, command);
 		case "askpass": {
 			const askpass = findAskpass(process.env, pathWhich(process.env));
-			return askpass ? runAskpass(askpass, prompt, command, { signal }) : undefined;
+			return askpass ? runAskpass(askpass, sudoPrompt(req), command, { signal }) : undefined;
 		}
 	}
 }

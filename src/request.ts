@@ -8,6 +8,8 @@ const MIN_DURATION_SECONDS = 1;
 const MAX_DURATION_SECONDS = 3600;
 /** Longest reason, in characters. A longer one could scroll the file list off the approval screen. */
 export const MAX_REASON_LENGTH = 200;
+/** The question sudo asks under the request. No % in it, so it needs no escaping for sudo -p. */
+export const PASSWORD_QUESTION = "Password to approve (cancel to refuse): ";
 // Epoch seconds: 1-12 digits, so the Date below stays in range.
 const EXPIRY_RE = /^[1-9][0-9]{0,11}$/;
 
@@ -84,7 +86,7 @@ export function durationSeconds(duration: string): number {
 	return match[2] === "h" ? n * 3600 : match[2] === "m" ? n * 60 : n;
 }
 
-/** Human-readable description of the request, shown before sudo asks. */
+/** Human-readable description of the request, shown once before sudo asks. */
 export function describeRequest(req: ShareRequest): string {
 	return [
 		"pi-read: the agent asks to read these root-only files",
@@ -93,9 +95,13 @@ export function describeRequest(req: ShareRequest): string {
 	].join("\n");
 }
 
-/** The sudo -p prompt: the request plus the password question, with % escaped for sudo. */
+/**
+ * The sudo -p prompt for the askpass, whose dialog is the only place the request can be shown:
+ * the request plus the password question, with % escaped for sudo. The terminal and the tmux
+ * popup print the request themselves and pass PASSWORD_QUESTION alone.
+ */
 export function sudoPrompt(req: ShareRequest): string {
-	return `${describeRequest(req)}\nPassword to approve (cancel to refuse): `.replaceAll("%", "%%");
+	return `${describeRequest(req)}\n${PASSWORD_QUESTION}`.replaceAll("%", "%%");
 }
 
 /** pi-share arguments (after the program path). */
