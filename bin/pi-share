@@ -33,6 +33,11 @@ readonly LIST_TIMEOUT=30
 # never-share.defaults when none is installed. pi-share refuses everything when it cannot use it.
 readonly NEVER_SHARE_LIST=/usr/local/etc/pi-read/never-share.list
 
+# gitleaks' report: one line per finding, with the staged copy, its first and last line, the number
+# of tags (gitleaks tags a finding it decoded), then the secret and the match in base64, so no byte
+# of them can break the row.
+readonly REPORT_TEMPLATE=$'{{ range . }}{{ .File }}\t{{ .StartLine }}\t{{ .EndLine }}\t{{ len .Tags }}\t{{ .Secret | b64enc }}\t{{ .Match | b64enc }}\n{{ end }}'
+
 # Virtual trees that are never shared, whatever the list says (they hold no files to copy).
 readonly BUILTIN_DENIED=(/proc /sys /dev)
 
@@ -655,24 +660,42 @@ report_text() {
 	head -n 1 -- "$1" 2>/dev/null | tr -d '[:cntrl:]' | cut -c1-200
 }
 
-# plan_redactions SCAN COUNT REPORT: print "<index> <first line> <last line>" for every finding in
-# REPORT (gitleaks' report for the copies staged under SCAN), deduplicated and sorted. Fail when a
-# line is not a finding for one of the COUNT staged files: the report is program output, so anything
+# plan_redactions SCAN COUNT REPORT: print a row for every finding in REPORT (gitleaks' report for
+# the copies staged under SCAN), deduplicated and sorted: "<index> <line> <line> <secret> <match>"
+# (base64) when only the secret on that line is to be replaced, else "<index> <first line> <last
+# line>" to replace the whole lines. A finding that spans lines, was decoded (tagged) or has no
+# secret or match, and a report line with only the location, replace whole lines. Fail when a line
+# is not a finding for one of the COUNT staged files: the report is program output, so anything
 # unexpected stops the share.
 plan_redactions() {
-	local scan=$1 count=$2 report=$3 line file start end index tabs
-	local -a rows=()
+	local scan=$1 count=$2 report=$3 line file start end index rest tags secret match
+	local -a rows=() fields=()
 	while IFS= read -r line; do
 		[[ -z ${line} ]] && continue
-		# Exactly two tabs: IFS also takes a run of tabs as one separator, so a line with an empty
-		# field would otherwise pass as three fields.
-		tabs=${line//$'\t'/}
-		if ((${#line} - ${#tabs} != 2)); then
+		# Split on every tab by hand: IFS takes a run of tabs as one separator, so a line with an
+		# empty field would otherwise pass with one field fewer.
+		fields=()
+		rest=${line}
+		while [[ ${rest} == *$'\t'* ]]; do
+			fields+=("${rest%%$'\t'*}")
+			rest=${rest#*$'\t'}
+		done
+		fields+=("${rest}")
+		tags="" secret="" match=""
+		if ((${#fields[@]} == 6)); then
+			tags=${fields[3]} secret=${fields[4]} match=${fields[5]}
+			if [[ ! ${tags} =~ ^[0-9]{1,9}$ || ! ${secret} =~ ^[A-Za-z0-9+/]*={0,2}$ ||
+				! ${match} =~ ^[A-Za-z0-9+/]*={0,2}$ ]]; then
+				printf 'pi-share: filtering failed: unexpected gitleaks report line: %q; nothing shared\n' \
+					"${line:0:200}" >&2
+				return 1
+			fi
+		elif ((${#fields[@]} != 3)); then
 			printf 'pi-share: filtering failed: unexpected gitleaks report line: %q; nothing shared\n' \
 				"${line:0:200}" >&2
 			return 1
 		fi
-		IFS=$'\t' read -r file start end <<<"${line}"
+		file=${fields[0]} start=${fields[1]} end=${fields[2]}
 		if [[ -z ${file} || -z ${start} || -z ${end} || ${file} != "${scan}/"* ]] ||
 			[[ ! ${start} =~ ^[1-9][0-9]{0,8}$ || ! ${end} =~ ^[1-9][0-9]{0,8}$ ]] ||
 			((start > end)); then
@@ -686,14 +709,99 @@ plan_redactions() {
 				"${line:0:200}" >&2
 			return 1
 		fi
-		rows+=("${index} ${start} ${end}")
+		# Any doubt about where the secret is on the line: the whole line goes.
+		if [[ -n ${tags} && ${tags} =~ ^0+$ && ${start} == "${end}" && -n ${secret} && -n ${match} ]]; then
+			rows+=("${index} ${start} ${end} ${secret} ${match}")
+		else
+			rows+=("${index} ${start} ${end}")
+		fi
 	done <<<"${report}"
 	((${#rows[@]} == 0)) && return 0
-	printf '%s\n' "${rows[@]}" | sort -u -k1,1n -k2,2n -k3,3n
+	# Keyed on every field, so -u drops only identical rows: two secrets on one line both stay.
+	printf '%s\n' "${rows[@]}" | LC_ALL=C sort -u -k1,1n -k2,2n -k3,3n -k4,4 -k5,5
+}
+
+# redact_line LINE SECRET MATCH [SECRET MATCH]...: print LINE with every occurrence of every SECRET
+# (overlapping ones too, all found on the original LINE) replaced by [REDACTED], overlapping or
+# adjacent occurrences merged into one. Bytes, not characters. Fail, so the caller replaces the
+# whole line, when a SECRET is empty or not in its MATCH, a MATCH is not on LINE, or a SECRET is
+# still in the result.
+redact_line() {
+	local LC_ALL=C
+	local line=$1 secret match pos rest pre from to out="" last=0 i
+	shift
+	local -a secrets=() ranges=()
+	(($# > 0 && $# % 2 == 0)) || return 1
+	while (($#)); do
+		secret=$1 match=$2
+		shift 2
+		[[ -n ${secret} && ${match} == *"${secret}"* && ${line} == *"${match}"* ]] || return 1
+		secrets+=("${secret}")
+		pos=0
+		while ((pos < ${#line})); do
+			rest=${line:pos}
+			pre=${rest%%"${secret}"*}
+			[[ ${pre} == "${rest}" ]] && break
+			from=$((pos + ${#pre}))
+			ranges+=("${from} $((from + ${#secret}))")
+			pos=$((from + 1))
+		done
+	done
+	((${#ranges[@]} > 0)) || return 1
+	# Merge the sorted ranges: one [REDACTED] for each run of overlapping or touching occurrences.
+	local cur_from=-1 cur_to=-1
+	while read -r from to; do
+		if ((cur_from >= 0 && from <= cur_to)); then
+			((to > cur_to)) && cur_to=${to}
+			continue
+		fi
+		if ((cur_from >= 0)); then
+			out+="${line:last:cur_from-last}[REDACTED]"
+			last=${cur_to}
+		fi
+		cur_from=${from} cur_to=${to}
+	done < <(printf '%s\n' "${ranges[@]}" | sort -n -k1,1 -k2,2)
+	out+="${line:last:cur_from-last}[REDACTED]${line:cur_to}"
+	for i in "${secrets[@]}"; do
+		[[ ${out} == *"${i}"* ]] && return 1
+	done
+	printf '%s\n' "${out}"
+}
+
+# decode_b64 B64 FILE: decode B64 into FILE and print it; fail when it does not decode or holds a
+# NUL byte or a newline, which bash cannot carry through a variable or sed through one line.
+decode_b64() {
+	local LC_ALL=C
+	printf '%s' "$1" | base64 -d >"$2" 2>/dev/null || return 1
+	[[ $(tr -d '\000\n' <"$2" | wc -c) == "$(wc -c <"$2")" ]] || return 1
+	cat -- "$2"
+}
+
+# partial_sed FILE LINE TMP SECRET MATCH...: print the sed command that replaces only the secrets
+# (base64) on line LINE of FILE, or fail so the caller replaces the whole line. TMP is scratch.
+partial_sed() {
+	local LC_ALL=C
+	local file=$1 n=$2 tmp=$3 text new value
+	shift 3
+	local -a args=()
+	while (($#)); do
+		value=$(decode_b64 "$1" "${tmp}") || return 1
+		args+=("${value}")
+		shift
+	done
+	sed -n "${n}{p;q}" -- "${file}" >"${tmp}" || return 1
+	[[ $(tr -d '\000' <"${tmp}" | wc -c) == "$(wc -c <"${tmp}")" ]] || return 1
+	text=$(cat -- "${tmp}")
+	new=$(redact_line "${text}" "${args[@]}") || return 1
+	new=${new//\\/\\\\}
+	new=${new//&/\\&}
+	new=${new//\//\\/}
+	printf '%ss/.*/%s/\n' "${n}" "${new}"
 }
 
 # filter_files DIR GITLEAKS RESOLVED...: run GITLEAKS over the copies of the RESOLVED files and
-# replace every line it flags with [REDACTED], all or nothing. The copies are hard-linked into
+# replace every secret it flags with [REDACTED] (the whole line when the secret cannot be located
+# safely on it), all or nothing. The copies are hard-linked into
 # DIR/.filter/scan under numbers: a copy keeps its source path, and gitleaks' global allowlist skips
 # paths such as node_modules/ or package-lock.json, so a path-bearing name would never be scanned.
 # The filter dir also holds the report template and gitleaks' log, so the scanned tree is nothing but
@@ -704,6 +812,8 @@ filter_files() {
 	shift 2
 	local -a resolved=()
 	local status=0 output planned="" index start end last_index="" seen_end=0 lines=0 files=0 why dup
+	local secret match group="" cmd w covered index_w from_w to_w
+	local -a partial=() whole=() pairs=()
 	# The same file requested twice is one copy: stage it once, so it is scanned, redacted and
 	# counted once.
 	for path in "$@"; do
@@ -732,7 +842,7 @@ filter_files() {
 		}
 	done
 	# One line per finding: the staged copy, then its first and last line.
-	printf '{{ range . }}{{ .File }}\t{{ .StartLine }}\t{{ .EndLine }}\n{{ end }}' >"${base}/template" || {
+	printf '%s' "${REPORT_TEMPLATE}" >"${base}/template" || {
 		echo "pi-share: filtering failed: could not write the report template; nothing shared" >&2
 		return 1
 	}
@@ -764,8 +874,13 @@ filter_files() {
 	fi
 	if [[ -n ${output} ]]; then
 		planned=$(plan_redactions "${scan}" "${#resolved[@]}" "${output}") || return 1
-		while read -r index start end; do
+		while read -r index start end secret match; do
 			[[ -z ${index} ]] && continue
+			if [[ -n ${secret} ]]; then
+				partial+=("${index} ${start} ${secret} ${match}")
+				continue
+			fi
+			whole+=("${index} ${start} ${end}")
 			printf '%s,%ss/.*/[REDACTED]/\n' "${start}" "${end}" >>"${base}/sed-${index}" || {
 				echo "pi-share: filtering failed: could not plan the redaction of ${resolved[index]}; nothing shared" >&2
 				return 1
@@ -784,6 +899,36 @@ filter_files() {
 				seen_end=${end}
 			fi
 		done <<<"${planned}"
+		# The partial rows, grouped by file and line (they arrive sorted). A line a whole-line range
+		# already covers stays covered; any other line gets its secrets replaced, or goes whole when
+		# they cannot be located safely. A sentinel row flushes the last group.
+		partial+=("")
+		for w in "${partial[@]}"; do
+			read -r index start secret match <<<"${w}"
+			if [[ -n ${group} && ${group} != "${index} ${start}" ]]; then
+				read -r i end <<<"${group}"
+				covered=0
+				for cmd in "${whole[@]}"; do
+					read -r index_w from_w to_w <<<"${cmd}"
+					if [[ ${index_w} == "${i}" ]] && ((from_w <= end && end <= to_w)); then
+						covered=1
+					fi
+				done
+				if ((covered == 0)); then
+					cmd=$(partial_sed "${dir}${resolved[i]}" "${end}" "${base}/tmp" "${pairs[@]}") ||
+						cmd="${end},${end}s/.*/[REDACTED]/"
+					printf '%s\n' "${cmd}" >>"${base}/sed-${i}" || {
+						echo "pi-share: filtering failed: could not plan the redaction of ${resolved[i]}; nothing shared" >&2
+						return 1
+					}
+					lines=$((lines + 1))
+				fi
+				pairs=()
+			fi
+			[[ -z ${index} ]] && break
+			group="${index} ${start}"
+			pairs+=("${secret}" "${match}")
+		done
 		for i in "${!resolved[@]}"; do
 			[[ -f ${base}/sed-${i} ]] || continue
 			if ! LC_ALL=C sed -i -f "${base}/sed-${i}" -- "${dir}${resolved[i]}"; then
