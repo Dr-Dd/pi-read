@@ -29,11 +29,15 @@ interface RuntimeTool {
 
 function loadTool(): RuntimeTool {
 	let registered: ToolDefinition | undefined;
-	piRead({
-		registerTool: (tool: ToolDefinition) => {
-			registered = tool;
-		},
-	} as unknown as ExtensionAPI);
+	// These tests run a fake sudo, never the installed pi-share, so its check is switched off.
+	piRead(
+		{
+			registerTool: (tool: ToolDefinition) => {
+				registered = tool;
+			},
+		} as unknown as ExtensionAPI,
+		{ helperProblem: () => undefined },
+	);
 	assert.ok(registered, "the extension registered no tool");
 	return registered as unknown as RuntimeTool;
 }

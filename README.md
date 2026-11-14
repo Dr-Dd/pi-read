@@ -76,6 +76,8 @@ cd pi-read
 
 `install.sh` installs everything: the pi extension (through `pi install`) and, after asking for your sudo password, `pi-share` and its sudoers rule. Read it before you run it: it changes system files. `./install.sh --uninstall` removes everything again.
 
+After updating pi-read (a `git pull`), run `./install.sh` again. pi uses the extension straight from this folder, but `pi-share` is a root-owned copy, so it stays at the old version until then. The extension notices the difference and refuses requests, telling the agent to ask you for this.
+
 Requirements: Linux with systemd, sudo and pi. Optional: tmux for popups, an askpass program for graphical prompts.
 
 ## Development
