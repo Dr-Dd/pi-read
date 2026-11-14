@@ -10,7 +10,9 @@
 #     /etc/pam.d/sudo (pam_permit: no password) and an empty /etc/sudoers.d;
 #   - mounts a fresh tmpfs on /run, so /run/pi-share starts out absent;
 #   - bind-mounts placeholder stubs over /usr/bin/systemd-run and /usr/bin/systemctl;
-#   - installs pi-share root-owned 0755 at /mnt/bin/pi-share.
+#   - installs pi-share root-owned 0755 at /mnt/bin/pi-share;
+#   - mounts a tmpfs on /usr/local/etc and installs the repo's never-share.defaults root-owned 0644
+#     at /usr/local/etc/pi-read/never-share.list, where pi-share reads the never-share list.
 # Then it evaluates SNIPPET as sandbox root with errexit on, so a failing `[ ... ]` fails the test
 # (the failing command is printed). Everything disappears with the namespace.
 #
@@ -47,7 +49,7 @@ sandbox() {
 }
 
 sandbox_setup() {
-	local pi_share=$1 s=/mnt f
+	local pi_share=$1 s=/mnt f defaults
 	set -e
 	mount -t tmpfs -o mode=0755 tmpfs "${s}"
 	mkdir -p "${s}/sudo-lib" "${s}/etc" "${s}/bin" "${s}/stub" "${s}/log"
@@ -64,6 +66,10 @@ sandbox_setup() {
 	mount --bind "${s}/sudo-lib" /usr/lib/sudo
 
 	install -o 0 -g 0 -m 0755 -- "${pi_share}" "${s}/bin/pi-share"
+	defaults=$(dirname -- "${pi_share}")/../never-share.defaults
+	mount -t tmpfs -o mode=0755 tmpfs /usr/local/etc
+	install -d -o 0 -g 0 -m 0755 -- /usr/local/etc/pi-read
+	install -o 0 -g 0 -m 0644 -- "${defaults}" /usr/local/etc/pi-read/never-share.list
 
 	printf '%s\n' 'root:x:0:0:root:/root:/bin/bash' \
 		"tester:x:${TESTER_UID}:${TESTER_UID}:tester:/mnt:/bin/bash" >"${s}/etc/passwd"

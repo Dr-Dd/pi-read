@@ -23,36 +23,15 @@ readonly DEFAULT_DURATION=900
 readonly MAX_DURATION=3600
 readonly MAX_BYTES=52428800
 
-# Prefixes (the path itself or anything below it) that are never shared.
-readonly DENIED_PREFIXES=(
-	/root
-	/etc/credstore
-	/etc/credstore.encrypted
-	/etc/cryptsetup-keys.d
-	/var/lib/systemd/credential.secret
-	/run/credentials
-	/etc/pacman.d/gnupg
-	/etc/ssl/private
-	/etc/letsencrypt/archive
-	/etc/letsencrypt/live
-	/etc/krb5.keytab
-	/etc/ipsec.secrets
-	/var/lib/samba/private
-	/var/lib/sss
-	/etc/libvirt/secrets
-	/etc/wireguard
-	/etc/NetworkManager/system-connections
-	/run/NetworkManager/system-connections
-	/etc/wpa_supplicant
-	/var/lib/iwd
-	/var/lib/bluetooth
-	/var/lib/systemd/coredump
-	/swapfile
-	/var/lib/docker
-	/proc
-	/sys
-	/dev
-)
+# The never-share list: root-owned, edited in place by root (sudoedit). install.sh creates it from
+# never-share.defaults when none is installed. pi-share refuses everything when it cannot use it.
+readonly NEVER_SHARE_LIST=/usr/local/etc/pi-read/never-share.list
+
+# Virtual trees that are never shared, whatever the list says (they hold no files to copy).
+readonly BUILTIN_DENIED=(/proc /sys /dev)
+
+# Entries of the never-share list (see parse_never_share), filled by load_never_share.
+DENIED_ENTRIES=()
 
 die() {
 	echo "pi-share: $*" >&2
@@ -118,16 +97,87 @@ validate_path() {
 	fi
 }
 
-# is_denied PATH: succeed when PATH is on the never-share list (by name).
+# parse_never_share FILE: print the entries of the never-share list FILE, one per line. Blank lines
+# and # comments are skipped, surrounding whitespace (a CR too) and trailing slashes are removed.
+# Fails, naming the line, on an entry that is not absolute or holds a control character, and on a
+# list with no entries at all.
+parse_never_share() {
+	local file=$1 line n=0 count=0
+	while IFS= read -r line || [[ -n ${line} ]]; do
+		n=$((n + 1))
+		[[ ${line} =~ ^[[:space:]]*(.*[^[:space:]])?[[:space:]]*$ ]] || true
+		line=${BASH_REMATCH[1]-}
+		[[ -z ${line} || ${line} == '#'* ]] && continue
+		while [[ ${line} == */ && ${line} != / ]]; do
+			line=${line%/}
+		done
+		if has_control_char "${line}"; then
+			printf 'pi-share: %s line %s: control character in entry: %q\n' "${file}" "${n}" "${line}" >&2
+			return 1
+		fi
+		if [[ ${line} != /* ]]; then
+			echo "pi-share: ${file} line ${n}: not an absolute path: ${line}" >&2
+			return 1
+		fi
+		printf '%s\n' "${line}"
+		count=$((count + 1))
+	done <"${file}" || return 1
+	if ((count == 0)); then
+		echo "pi-share: ${file}: no entries" >&2
+		return 1
+	fi
+}
+
+# load_never_share FILE UID GID: fill DENIED_ENTRIES from FILE. Fails closed unless FILE is a
+# regular, root-owned file at its canonical path (not a link) that the user cannot alter, nor any
+# directory above it, and parses cleanly.
+load_never_share() {
+	local file=$1 uid=$2 gid=$3 resolved owner dir entries
+	if [[ ! -e ${file} && ! -L ${file} ]]; then
+		echo "pi-share: the never-share list is missing: ${file}" >&2
+		return 1
+	fi
+	resolved=$(realpath -e -- "${file}") || {
+		echo "pi-share: cannot resolve the never-share list: ${file}" >&2
+		return 1
+	}
+	if [[ ${resolved} != "${file}" || ! -f ${file} ]]; then
+		echo "pi-share: the never-share list is not a regular file (a link?): ${file}" >&2
+		return 1
+	fi
+	owner=$(stat -c '%u' -- "${file}") || {
+		echo "pi-share: cannot examine the never-share list: ${file}" >&2
+		return 1
+	}
+	if [[ ${owner} != 0 ]]; then
+		echo "pi-share: the never-share list is not owned by root: ${file}" >&2
+		return 1
+	fi
+	dir=${file}
+	while :; do
+		if user_can_write "${dir}" "${uid}" "${gid}"; then
+			echo "pi-share: the never-share list is writable by you: ${file} (${dir})" >&2
+			return 1
+		fi
+		[[ ${dir} == / ]] && break
+		dir=$(dirname -- "${dir}") || return 1
+	done
+	entries=$(parse_never_share "${file}") || return 1
+	mapfile -t DENIED_ENTRIES <<<"${entries}"
+}
+
+# is_denied PATH: succeed when PATH is, or is below, a built-in or never-share list entry (by name).
+# List entries are patterns: * ? [...] match as in the shell, * crossing / too.
 is_denied() {
-	local path=$1 prefix
-	case ${path} in
-	/etc/shadow* | /etc/gshadow* | /etc/security/opasswd* | /etc/ssh/ssh_host_*_key) return 0 ;;
-	/etc/ppp/*-secrets) return 0 ;;
-	*) ;;
-	esac
-	for prefix in "${DENIED_PREFIXES[@]}"; do
+	local path=$1 prefix entry
+	for prefix in "${BUILTIN_DENIED[@]}"; do
 		if [[ ${path} == "${prefix}" || ${path} == "${prefix}"/* ]]; then
+			return 0
+		fi
+	done
+	for entry in "${DENIED_ENTRIES[@]}"; do
+		# shellcheck disable=SC2053 # entries are patterns on purpose
+		if [[ ${path} == ${entry} || ${path} == ${entry%/}/* ]]; then
 			return 0
 		fi
 	done
@@ -143,30 +193,48 @@ is_swap_device() {
 	return 1
 }
 
-# denied_scan_roots: print the DENIED_PREFIXES worth walking for hard links. The virtual trees
-# hold no regular files to link to, and /swapfile is found through /proc/swaps.
+# denied_scan_roots: print the never-share list entries worth walking for hard links. The virtual
+# trees hold no regular files to link to, and /swapfile is stat-ed by denied_identities itself.
 denied_scan_roots() {
-	local prefix
-	for prefix in "${DENIED_PREFIXES[@]}"; do
-		case ${prefix} in
+	local entry
+	for entry in "${DENIED_ENTRIES[@]}"; do
+		case ${entry} in
 		/proc | /sys | /dev | /swapfile) continue ;;
-		*) printf '%s\n' "${prefix}" ;;
+		*) printf '%s\n' "${entry}" ;;
 		esac
 	done
 }
 
+# pattern_base PATTERN: print the directory part of PATTERN before its first glob character (/ at
+# least), where a walk for the files PATTERN matches has to start.
+pattern_base() {
+	local head=${1%%[*?[]*}
+	head=${head%/*}
+	printf '%s\n' "${head:-/}"
+}
+
 # denied_identities: print "dev:inode" of the existing never-share files, to catch hard links.
+# A literal entry is walked as is. A pattern is walked from pattern_base and each file is matched
+# against it with the same rule as is_denied (so * crosses / here too). find -H follows an entry
+# that is itself a link, so the file it names is covered.
 denied_identities() {
-	local file name rest roots=()
-	for file in /etc/shadow* /etc/gshadow* /etc/security/opasswd* /etc/ssh/ssh_host_*_key \
-		/etc/ppp/*-secrets /swapfile /var/lib/systemd/credential.secret; do
-		[[ -f ${file} ]] && stat -c '%d:%i' -- "${file}"
-	done
+	local name rest root path identity
+	[[ -f /swapfile ]] && stat -L -c '%d:%i' -- /swapfile
 	while read -r name rest; do
-		[[ -f ${name} ]] && stat -c '%d:%i' -- "${name}"
+		[[ -f ${name} ]] && stat -L -c '%d:%i' -- "${name}"
 	done < <(tail -n +2 /proc/swaps 2>/dev/null || true)
-	mapfile -t roots < <(denied_scan_roots)
-	find "${roots[@]}" -xdev -type f -printf '%D:%i\n' 2>/dev/null || true
+	while IFS= read -r root; do
+		if [[ ${root} != *[*?[]* ]]; then
+			find -H "${root}" -xdev -type f -printf '%D:%i\n' 2>/dev/null || true
+			continue
+		fi
+		while IFS= read -r -d '' path && IFS= read -r -d '' identity; do
+			# shellcheck disable=SC2053 # entries are patterns on purpose
+			if [[ ${path} == ${root} || ${path} == ${root}/* ]]; then
+				printf '%s\n' "${identity}"
+			fi
+		done < <(find -H "$(pattern_base "${root}")" -xdev -type f -printf '%p\0%D:%i\0' 2>/dev/null || true)
+	done < <(denied_scan_roots)
 	return 0
 }
 
@@ -311,6 +379,8 @@ main() {
 	gid=${SUDO_GID:-}
 	[[ ${uid} =~ ^[1-9][0-9]{0,9}$ && ${gid} =~ ^[1-9][0-9]{0,9}$ ]] ||
 		die "SUDO_UID and SUDO_GID must name a non-root user"
+	load_never_share "${NEVER_SHARE_LIST}" "${uid}" "${gid}" ||
+		die "cannot use the never-share list ${NEVER_SHARE_LIST}; nothing shared"
 	if [[ -n ${pid} ]]; then
 		validate_pid "${pid}" || exit 1
 	fi
@@ -376,4 +446,10 @@ main() {
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
 	main "$@"
+else
+	# Sourced (only tests do this): start from the shipped defaults when they are next to the script.
+	# Executed, pi-share only ever reads NEVER_SHARE_LIST (in main).
+	if [[ -f $(dirname -- "${BASH_SOURCE[0]}")/../never-share.defaults ]]; then
+		mapfile -t DENIED_ENTRIES < <(parse_never_share "$(dirname -- "${BASH_SOURCE[0]}")/../never-share.defaults")
+	fi
 fi

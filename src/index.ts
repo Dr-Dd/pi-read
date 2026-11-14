@@ -6,7 +6,7 @@
 import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { PI_SHARE_PATH } from "./config.ts";
-import { helperProblem } from "./helper.ts";
+import { helperProblem, neverShareProblem } from "./helper.ts";
 import { choosePromptMethods, findAskpass, type PromptMethod, pathWhich } from "./prompt.ts";
 import {
 	describeRequest,
@@ -84,12 +84,15 @@ async function runWith(
 }
 
 export interface PiReadOptions {
-	/** Why the installed pi-share cannot be used, if so. Tests replace it: they run no real pi-share. */
+	/**
+	 * Why the installed pi-share or never-share list cannot be used, if so. Tests replace it: they run
+	 * no real pi-share.
+	 */
 	helperProblem?: () => string | undefined;
 }
 
 export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): void {
-	const checkHelper = options.helperProblem ?? helperProblem;
+	const checkHelper = options.helperProblem ?? (() => helperProblem() ?? neverShareProblem());
 	pi.registerTool({
 		name: "request_root_read",
 		label: "Request root read",

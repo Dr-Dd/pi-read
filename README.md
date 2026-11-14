@@ -51,7 +51,7 @@ Durations are written the way `sleep` takes them: `90` or `90s` for seconds, `15
 
 ### Files that are never shared
 
-Some files are effectively passwords. `pi-share` refuses them even if you approve them:
+Some files are effectively passwords. `pi-share` refuses them even if you approve them. By default these are:
 
 - password hashes: `/etc/shadow`, `/etc/gshadow`, `/etc/security/opasswd` and their backups
 - SSH host private keys: `/etc/ssh/ssh_host_*_key`
@@ -62,10 +62,25 @@ Some files are effectively passwords. `pi-share` refuses them even if you approv
 - network secrets: `/etc/wireguard`, `/etc/NetworkManager/system-connections`, `/run/NetworkManager/system-connections`, `/etc/wpa_supplicant`, `/var/lib/iwd`, `/var/lib/bluetooth`
 - the package signing keyring: `/etc/pacman.d/gnupg`
 - directory service and virtualisation state: `/var/lib/samba/private`, `/var/lib/sss`, `/etc/libvirt/secrets`
-- memory contents: `/var/lib/systemd/coredump`, `/swapfile` and swap devices
+- memory contents: `/var/lib/systemd/coredump` and `/swapfile`
 - `/var/lib/docker`
 
-It also refuses `/proc`, `/sys` and `/dev`, anywhere your own user can write (such as `/home` and `/tmp`), and links that lead to any of the above.
+The list is a root-owned file, `/usr/local/etc/pi-read/never-share.list`, and you change it by editing that file as root:
+
+```sh
+sudoedit /usr/local/etc/pi-read/never-share.list
+```
+
+Changes apply from the next request; there is nothing to re-run. Each line is one absolute path, and it refuses that path and everything below it. `*`, `?` and `[...]` work as in the shell, except that `*` also crosses `/`. Blank lines and lines starting with `#` are ignored. `install.sh` creates the file from the shipped defaults in [`never-share.defaults`](never-share.defaults) when none is installed. Don't edit `never-share.defaults`: nothing reads it after that. To compare your list with the defaults, or go back to them:
+
+```sh
+sudo diff -u never-share.defaults /usr/local/etc/pi-read/never-share.list
+./install.sh --reset-never-share
+```
+
+`pi-share` refuses every request when the list is missing, has no entries, has an entry that is not an absolute path or holds a control character, is a link, is not owned by root, or is writable by you (directly or through a folder above it).
+
+Whatever the list says, `pi-share` also refuses `/proc`, `/sys` and `/dev`, swap devices, anywhere your own user can write (such as `/home` and `/tmp`), and links that lead to any of the above.
 
 Links are refused altogether, as is any path that is not written out in full (`/etc/../etc/fstab`): you approve the path you are shown, so it has to be the file that gets copied. `pi-share` names the real path in its refusal, and the agent can ask for that instead.
 
@@ -79,7 +94,7 @@ cd pi-read
 ./install.sh
 ```
 
-`install.sh` installs everything: the pi extension (through `pi install`) and, after asking for your sudo password, `pi-share` and its sudoers rule. Read it before you run it: it changes system files. `./install.sh --uninstall` removes everything again.
+`install.sh` installs everything: the pi extension (through `pi install`) and, after asking for your sudo password, `pi-share`, its sudoers rule and the [never-share list](#files-that-are-never-shared). Read it before you run it: it changes system files. It installs the never-share list only when none is installed yet; your edits are never overwritten (it tells you when your list differs from the shipped defaults). `./install.sh --uninstall` removes everything again except your never-share list; `./install.sh --uninstall --purge` removes that too.
 
 After updating pi-read (a `git pull`), run `./install.sh` again. pi uses the extension straight from this folder, but `pi-share` is a root-owned copy, so it stays at the old version until then. The extension notices the difference and refuses requests, telling the agent to ask you for this.
 

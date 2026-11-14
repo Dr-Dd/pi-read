@@ -65,9 +65,11 @@ run_install() {
 	run grep -nE '^(pi|sudo) ' "$LOG"
 	[[ ${lines[0]} == "1:pi install $REPO" ]]
 	[[ ${lines[1]} == *"sudo install -m 0755 -o root -g root -- $REPO/bin/pi-share /usr/local/bin/pi-share" ]]
-	[[ ${lines[2]} == *"sudo install -m 0440 -o root -g root -- "*" /etc/sudoers.d/pi-read" ]]
-	[[ ${lines[3]} == *"sudo visudo -cq" ]]
-	[ "${#lines[@]}" -eq 4 ]
+	[[ ${lines[2]} == *"sudo test -e /usr/local/etc/pi-read/never-share.list -o -L /usr/local/etc/pi-read/never-share.list" ]]
+	[[ ${lines[3]} == *"sudo cmp -s -- $REPO/never-share.defaults /usr/local/etc/pi-read/never-share.list" ]]
+	[[ ${lines[4]} == *"sudo install -m 0440 -o root -g root -- "*" /etc/sudoers.d/pi-read" ]]
+	[[ ${lines[5]} == *"sudo visudo -cq" ]]
+	[ "${#lines[@]}" -eq 6 ]
 }
 
 @test "install: a failing pi install never calls sudo" {
