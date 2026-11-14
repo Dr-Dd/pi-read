@@ -64,7 +64,11 @@ Some files are effectively passwords. `pi-share` refuses them even if you approv
 - memory contents: `/var/lib/systemd/coredump`, `/swapfile` and swap devices
 - `/var/lib/docker`
 
-It also refuses `/proc`, `/sys` and `/dev`, anywhere your own user can write (such as `/home` and `/tmp`), and links that lead to any of the above. Paths with control characters (a tab, a newline) are refused too: `pi-share` prints one file per line as `requested<TAB>copy`, so it could not pass such a path on.
+It also refuses `/proc`, `/sys` and `/dev`, anywhere your own user can write (such as `/home` and `/tmp`), and links that lead to any of the above.
+
+Links are refused altogether, as is any path that is not written out in full (`/etc/../etc/fstab`): you approve the path you are shown, so it has to be the file that gets copied. `pi-share` names the real path in its refusal, and the agent can ask for that instead.
+
+Paths with control characters (a tab, a newline) are refused too: `pi-share` prints one file per line as `requested<TAB>copy`, so it could not pass such a path on.
 
 ## Installation
 
@@ -97,7 +101,7 @@ npm ci
 - the agent reading the files on the never-share list, even if you approve them;
 - other users on the machine reading the copies;
 - shares lasting longer than you allowed, or than the hard limit;
-- tricks such as a link in your home folder pointing at `/etc/shadow`.
+- tricks such as a link in your home folder with a harmless name pointing at another file, or a program planted on your `PATH` to run as root.
 
 **It does not stop:**
 

@@ -68,7 +68,7 @@ sandbox_setup() {
 	printf '%s\n' 'root:x:0:0:root:/root:/bin/bash' \
 		"tester:x:${TESTER_UID}:${TESTER_UID}:tester:/mnt:/bin/bash" >"${s}/etc/passwd"
 	printf '%s\n' 'root:x:0:' "tester:x:${TESTER_UID}:" >"${s}/etc/group"
-	# PLACEHOLDER for the sudoers rule install.sh will add (install.sh does not exist yet).
+	# Stands in for the sudoers rule install.sh adds, with pi-share at its sandbox path.
 	cat >"${s}/etc/sudoers" <<-'EOF'
 		# Sandbox placeholder for the pi-share rule from install.sh.
 		Defaults !lecture

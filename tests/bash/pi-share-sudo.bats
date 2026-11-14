@@ -53,16 +53,17 @@ setup() {
 	[ "$status" -eq 0 ]
 }
 
-@test "sudo: a symlink is reported as requested and copied under its resolved path" {
+@test "sudo: a symlink is refused, naming the file it leads to" {
 	run sandbox '
 		make_file /mnt/data/real "R"
 		mkdir -m 0755 /mnt/links
 		ln -s /mnt/data/real /mnt/links/alias
 		share -- /mnt/links/alias
-		[ "$rc" -eq 0 ]
-		dir=$(share_dirs)
-		[ "$(printf "%s\n" "$out" | sed -n 2p)" = "/mnt/links/alias"$'"'"'\t'"'"'"$dir/mnt/data/real" ]
-		[ "$(cat "$dir/mnt/data/real")" = "R" ]
+		[ "$rc" -eq 1 ]
+		[[ $err == *"refused (a link, or not a canonical path): /mnt/links/alias; request /mnt/data/real itself"* ]]
+		[ -z "$out" ]
+		[ -z "$(share_dirs)" ]
+		[ -z "$(stub_log systemd-run)" ]
 	'
 	echo "$output"
 	[ "$status" -eq 0 ]

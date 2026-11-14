@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # pi-share: root-owned helper that copies approved files into /run/pi-share/. See README.md.
 #
 #   sudo pi-share [--duration DUR] [--pid PID] -- FILE...
@@ -6,6 +6,9 @@
 # Prints "expires<TAB><epoch seconds>" (when the cleanup removes the copies), then
 # "<requested path><TAB><copy path>" per file. Errors go to stderr (exit 1), usage errors
 # exit 2. All or nothing: every file is validated before anything is copied.
+#
+# It trusts nothing from the caller's environment: the shebang names bash by its full path and
+# main sets PATH itself, so it does not depend on sudoers setting secure_path.
 #
 # Design: the share tree stays root-owned while root writes it, so root never writes into a path
 # the user controls. It is handed to the user (chown -h) as the very last step.
@@ -205,6 +208,12 @@ check_file() {
 		echo "pi-share: refused (never shared): ${file} -> ${resolved}" >&2
 		return 1
 	fi
+	# Only the path as requested is shown to the user for approval, so it must be the file itself:
+	# a link (which the user's own programs could have made) would show one name and copy another.
+	if [[ ${resolved} != "${file}" ]]; then
+		echo "pi-share: refused (a link, or not a canonical path): ${file}; request ${resolved} itself" >&2
+		return 1
+	fi
 	if [[ ! -f ${resolved} ]]; then
 		echo "pi-share: not a regular file: ${file}" >&2
 		return 1
@@ -262,6 +271,9 @@ unit_expiry() {
 
 main() {
 	local duration=${DEFAULT_DURATION} pid="" file uid gid started expires
+	# Never the caller's PATH: sudo keeps it unless sudoers sets secure_path.
+	PATH=/usr/sbin:/usr/bin:/sbin:/bin
+	export PATH
 	while (($#)); do
 		case $1 in
 		--duration)
