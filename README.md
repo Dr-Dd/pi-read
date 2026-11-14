@@ -45,6 +45,29 @@ own `PATH` (`/usr/local/bin`, then the system directories), never yours.
 Detection is best effort. A secret no rule matches, one inside an archive, and one in a file gitleaks
 could not read all reach the copy: see [What it protects against](#what-it-protects-against-and-what-it-doesnt).
 
+### Directory listings
+
+The agent can also ask for listings of root-only directories, with the `request_root_list` tool:
+one level deep (the default) or recursively, up to 10 levels. You approve them the same way, and
+the listings are files in the share, filtered through gitleaks and deleted with it. `pi-share`
+checks each directory as it checks a file: written out in full (no links), not on the never-share
+list, and not writable by you. A never-share directory mounted somewhere else is refused too.
+
+A listing is `ls -l` style: mode, links, owner, group, size, modification time and the path
+relative to the listed directory (`.` for itself), sorted by path, after a `#` header line.
+
+- **Never-shared entries are left out.** An entry on the never-share list, a hard link to a
+  never-share file, or a never-share directory mounted inside the listed one is left out, along
+  with everything below it. A `#` line at the end says how many entries were left out, never which.
+- **Links are never followed.** A link is shown as `name -> target`, and its target directory is
+  not entered. A link whose target is never shared (as written, or after following the links on
+  the way) shows `name -> [never shared]` instead, so a link cannot leak a never-share name.
+- **Names cannot fake lines.** A name with a control character (a newline, an escape) is written
+  quoted, as `$'...'`.
+- **Large trees are cut short.** A listing stops after 5000 entries per directory, or after 30
+  seconds, and says so in a `#` line at the end. Entries that root could not read are mentioned
+  there too.
+
 ### Password prompt
 
 Your password always goes to sudo itself, never to the agent or the conversation. pi-read uses the first of these that works:
@@ -65,6 +88,8 @@ sudo asks every time: pi-read sets `timestamp_timeout=0` for `pi-share`, so no c
 | Longest share | 60 minutes (`1h`). Built into `pi-share`; nothing the agent asks for can raise it |
 | Default share | 15 minutes (`15m`) |
 | Size per share | 50 MB, since the copies use RAM |
+| Listing depth | 10 levels (default 1) |
+| Listing size | 5000 entries per directory, 30 seconds per directory |
 | Reason | 200 characters, on one line, so it cannot push the file list off the approval screen |
 
 Durations are written the way `sleep` takes them: `90` or `90s` for seconds, `15m` for minutes, `1h` for hours.

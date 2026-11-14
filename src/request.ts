@@ -46,18 +46,55 @@ export interface ShareOutput {
 	expires?: Date;
 }
 
+/** Directory listings: deepest recursion pi-share accepts (MAX_DEPTH in bin/pi-share). */
+export const MAX_LIST_DEPTH = 10;
+
+export interface ListRequest {
+	directories: string[];
+	depth: number;
+	duration: string;
+	reason: string;
+}
+
+/** Absolute paths without control or invisible characters, @ stripped, duplicates removed. */
+function normalizePaths(raws: string[]): string[] {
+	const paths: string[] = [];
+	for (const raw of raws) {
+		const path = raw.startsWith("@") ? raw.slice(1) : raw;
+		if (CONTROL_CHAR.test(path)) throw new Error(`invalid path (control character): ${quote(path)}`);
+		// Invisible characters would let the approval screen show a different path than pi-share copies.
+		if (INVISIBLE_CHAR.test(path)) throw new Error(`invalid path (invisible character): ${quote(path)}`);
+		if (!path.startsWith("/")) throw new Error(`not an absolute path: ${path}`);
+		if (!paths.includes(path)) paths.push(path);
+	}
+	return paths;
+}
+
 /** Validate and normalize the tool input. Throws an Error with a message for the model. */
 export function normalizeRequest(input: { files: string[]; duration?: string; reason: string }): ShareRequest {
-	const files: string[] = [];
-	for (const raw of input.files) {
-		const file = raw.startsWith("@") ? raw.slice(1) : raw;
-		if (CONTROL_CHAR.test(file)) throw new Error(`invalid path (control character): ${quote(file)}`);
-		// Invisible characters would let the approval screen show a different path than pi-share copies.
-		if (INVISIBLE_CHAR.test(file)) throw new Error(`invalid path (invisible character): ${quote(file)}`);
-		if (!file.startsWith("/")) throw new Error(`not an absolute path: ${file}`);
-		if (!files.includes(file)) files.push(file);
-	}
+	const files = normalizePaths(input.files);
 	if (files.length === 0) throw new Error("no files requested");
+	return { files, ...normalizeCommon(input) };
+}
+
+/** Validate and normalize request_root_list's input. Throws an Error with a message for the model. */
+export function normalizeListRequest(input: {
+	directories: string[];
+	depth?: number;
+	duration?: string;
+	reason: string;
+}): ListRequest {
+	const directories = normalizePaths(input.directories);
+	if (directories.length === 0) throw new Error("no directories requested");
+	const depth = input.depth ?? 1;
+	if (!Number.isInteger(depth) || depth < 1 || depth > MAX_LIST_DEPTH) {
+		throw new Error(`invalid depth: ${quote(String(depth))} (a whole number from 1 to ${MAX_LIST_DEPTH})`);
+	}
+	return { directories, depth, ...normalizeCommon(input) };
+}
+
+/** The duration and reason rules both tools share. */
+function normalizeCommon(input: { duration?: string; reason: string }): { duration: string; reason: string } {
 	const duration = input.duration?.trim() || DEFAULT_DURATION;
 	if (!DURATION_RE.test(duration)) {
 		throw new Error(`invalid duration: ${quote(duration)} (use e.g. 90, 90s, 15m or 1h)`);
@@ -75,7 +112,7 @@ export function normalizeRequest(input: { files: string[]; duration?: string; re
 	if (reasonLength > MAX_REASON_LENGTH) {
 		throw new Error(`reason too long: ${reasonLength} characters (the maximum is ${MAX_REASON_LENGTH})`);
 	}
-	return { files, duration, reason };
+	return { duration, reason };
 }
 
 /** Seconds in a duration already accepted by normalizeRequest. */
@@ -102,6 +139,45 @@ export function describeRequest(req: ShareRequest): string {
  */
 export function sudoPrompt(req: ShareRequest): string {
 	return `${describeRequest(req)}\n${PASSWORD_QUESTION}`.replaceAll("%", "%%");
+}
+
+/** Human-readable description of a listing request, shown once before sudo asks. */
+export function describeListRequest(req: ListRequest): string {
+	const depth = req.depth === 1 ? "one level" : `${req.depth} levels deep`;
+	return [
+		`pi-read: the agent asks to list these root-only directories, ${depth}`,
+		...req.directories.map((d) => `  ${d}`),
+		`for ${req.duration}. Reason: ${req.reason}`,
+	].join("\n");
+}
+
+/** The sudo -p prompt for the askpass, for a listing request (see sudoPrompt). */
+export function listPrompt(req: ListRequest): string {
+	return `${describeListRequest(req)}\n${PASSWORD_QUESTION}`.replaceAll("%", "%%");
+}
+
+/** pi-share arguments for a listing (after the program path). */
+export function listArgs(req: ListRequest, pid: number): string[] {
+	return [
+		"--duration",
+		req.duration,
+		"--pid",
+		String(pid),
+		"--list",
+		"--depth",
+		String(req.depth),
+		"--",
+		...req.directories,
+	];
+}
+
+/** Text for the model after a successful listing. */
+export function formatListResult(shared: SharedFile[], expires: Date): string {
+	return [
+		`Approved. Directory listings (snapshots), deleted at ${expires.toISOString()}:`,
+		...shared.map((s) => `  ${s.requested} -> ${s.copy}`),
+		"Read the listings with your normal tools. Entries that are never shared are left out and only counted.",
+	].join("\n");
 }
 
 /** pi-share arguments (after the program path). */

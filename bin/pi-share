@@ -2,9 +2,11 @@
 # pi-share: root-owned helper that copies approved files into /run/pi-share/. See README.md.
 #
 #   sudo pi-share [--duration DUR] [--pid PID] -- FILE...
+#   sudo pi-share [--duration DUR] [--pid PID] --list [--depth N] -- DIR...
 #
 # Prints "expires<TAB><epoch seconds>" (when the cleanup removes the copies), then
-# "<requested path><TAB><copy path>" per file. Errors go to stderr (exit 1), usage errors
+# "<requested path><TAB><copy path>" per file. With --list, each DIR is listed (N levels deep,
+# default 1) and the copy path is that listing. Errors go to stderr (exit 1), usage errors
 # exit 2. All or nothing: every file is validated before anything is copied.
 #
 # It trusts nothing from the caller's environment: the shebang names bash by its full path and
@@ -22,6 +24,10 @@ readonly SHARE_ROOT=/run/pi-share
 readonly DEFAULT_DURATION=900
 readonly MAX_DURATION=3600
 readonly MAX_BYTES=52428800
+# Listings: deepest recursion, most entries per directory, longest find run (seconds).
+readonly MAX_DEPTH=10
+readonly MAX_ENTRIES=5000
+readonly LIST_TIMEOUT=30
 
 # The never-share list: root-owned, edited in place by root (sudoedit). install.sh creates it from
 # never-share.defaults when none is installed. pi-share refuses everything when it cannot use it.
@@ -40,7 +46,17 @@ die() {
 
 usage() {
 	echo "usage: pi-share [--duration DUR] [--pid PID] -- FILE..." >&2
+	echo "       pi-share [--duration DUR] [--pid PID] --list [--depth N] -- DIR..." >&2
 	exit 2
+}
+
+# parse_depth N: print N when it is a listing depth from 1 to MAX_DEPTH.
+parse_depth() {
+	if [[ ! $1 =~ ^[1-9][0-9]?$ ]] || (($1 > MAX_DEPTH)); then
+		echo "pi-share: invalid depth: $1 (1 to ${MAX_DEPTH})" >&2
+		return 1
+	fi
+	echo "$1"
 }
 
 # parse_duration DUR: print seconds for N, Ns, Nm or Nh (1 s up to the 1 h maximum).
@@ -263,19 +279,22 @@ pattern_base() {
 	printf '%s\n' "${head:-/}"
 }
 
-# denied_identities: print "dev:inode" of the existing never-share files, to catch hard links.
+# denied_identities [TYPE]: print "dev:inode" of the existing never-share files (TYPE f, the
+# default), to catch hard links, or of the never-share directories (TYPE d), to catch bind mounts.
 # A literal entry is walked as is. A pattern is walked from pattern_base and each file is matched
 # against it with the same rule as is_denied (so * crosses / here too). find -H follows an entry
 # that is itself a link, so the file it names is covered.
 denied_identities() {
-	local name rest root path identity
-	[[ -f /swapfile ]] && stat -L -c '%d:%i' -- /swapfile
-	while read -r name rest; do
-		[[ -f ${name} ]] && stat -L -c '%d:%i' -- "${name}"
-	done < <(tail -n +2 /proc/swaps 2>/dev/null || true)
+	local type=${1:-f} name rest root path identity
+	if [[ ${type} == f ]]; then
+		[[ -f /swapfile ]] && stat -L -c '%d:%i' -- /swapfile
+		while read -r name rest; do
+			[[ -f ${name} ]] && stat -L -c '%d:%i' -- "${name}"
+		done < <(tail -n +2 /proc/swaps 2>/dev/null || true)
+	fi
 	while IFS= read -r root; do
 		if [[ ${root} != *[*?[]* ]]; then
-			find -H "${root}" -xdev -type f -printf '%D:%i\n' 2>/dev/null || true
+			find -H "${root}" -xdev -type "${type}" -printf '%D:%i\n' 2>/dev/null || true
 			continue
 		fi
 		while IFS= read -r -d '' path && IFS= read -r -d '' identity; do
@@ -283,7 +302,7 @@ denied_identities() {
 			if [[ ${path} == ${root} || ${path} == ${root}/* ]]; then
 				printf '%s\n' "${identity}"
 			fi
-		done < <(find -H "$(pattern_base "${root}")" -xdev -type f -printf '%p\0%D:%i\0' 2>/dev/null || true)
+		done < <(find -H "$(pattern_base "${root}")" -xdev -type "${type}" -printf '%p\0%D:%i\0' 2>/dev/null || true)
 	done < <(denied_scan_roots)
 	return 0
 }
@@ -363,6 +382,251 @@ check_file() {
 		return 1
 	}
 	printf '%s\t%s\n' "${resolved}" "${size}"
+}
+
+# check_dir DIR UID GID DENIED_DIRS: validate one directory to list; print its resolved path.
+# The same rules as check_file; DENIED_DIRS is the output of `denied_identities d`, so a bind
+# mount of a never-share directory is refused too.
+check_dir() {
+	local file=$1 uid=$2 gid=$3 denied=$4 resolved dir identity
+	validate_path "${file}" || return 1
+	if is_denied "${file}"; then
+		echo "pi-share: refused (never shared): ${file}" >&2
+		return 1
+	fi
+	resolved=$(realpath -e -- "${file}") || {
+		echo "pi-share: cannot resolve: ${file}" >&2
+		return 1
+	}
+	if has_control_char "${resolved}"; then
+		printf 'pi-share: refused (control character): %q -> %q\n' "${file}" "${resolved}" >&2
+		return 1
+	fi
+	if is_denied "${resolved}"; then
+		echo "pi-share: refused (never shared): ${file} -> ${resolved}" >&2
+		return 1
+	fi
+	if [[ ${resolved} != "${file}" ]]; then
+		echo "pi-share: refused (a link, or not a canonical path): ${file}; request ${resolved} itself" >&2
+		return 1
+	fi
+	if [[ ! -d ${resolved} ]]; then
+		echo "pi-share: not a directory: ${file}" >&2
+		return 1
+	fi
+	identity=$(stat -c '%d:%i' -- "${resolved}") || {
+		echo "pi-share: cannot examine: ${file}" >&2
+		return 1
+	}
+	if is_denied_identity "${identity}" "${denied}"; then
+		echo "pi-share: refused (never shared, mounted elsewhere): ${file}" >&2
+		return 1
+	fi
+	dir=${resolved}
+	while :; do
+		if user_can_write "${dir}" "${uid}" "${gid}"; then
+			echo "pi-share: refused (writable by you): ${file} (${dir})" >&2
+			return 1
+		fi
+		[[ ${dir} == / ]] && break
+		dir=$(dirname -- "${dir}") || return 1
+	done
+	printf '%s\n' "${resolved}"
+}
+
+# list_prune_args: print, NUL-separated, the find expression matching every built-in and
+# never-share entry and everything below it: -path E -o -path E/* -o ... (find's -path lets *
+# cross / as is_denied does), so the listing never descends into them.
+list_prune_args() {
+	local entry first=1
+	for entry in "${BUILTIN_DENIED[@]}" "${DENIED_ENTRIES[@]}"; do
+		if ((first == 0)); then
+			printf '%s\0' -o
+		fi
+		first=0
+		printf '%s\0' -path "${entry}" -o -path "${entry%/}/*"
+	done
+}
+
+# escape_name TEXT VAR: set VAR to TEXT, %q-quoted when it holds a control character, so a name
+# can neither break a listing line nor fake one.
+escape_name() {
+	if has_control_char "$1"; then
+		printf -v "$2" '%q' "$1"
+	else
+		printf -v "$2" '%s' "$1"
+	fi
+}
+
+# link_target_denied PATH TARGET: succeed when the symlink PATH, whose content is TARGET, leads to
+# a never-share path, read lexically or by following links. Fails closed.
+link_target_denied() {
+	local path=$1 target=$2 lexical resolved
+	if [[ ${target} != /* ]]; then
+		target=${path%/*}/${target}
+	fi
+	lexical=$(realpath -m -s -- "${target}" 2>/dev/null) || return 0
+	is_denied "${lexical}" && return 0
+	resolved=$(realpath -m -- "${path}" 2>/dev/null) || return 0
+	is_denied "${resolved}" && return 0
+	is_swap_device "${resolved}" && return 0
+	return 1
+}
+
+# format_entry MODE LINKS OWNER GROUP SIZE MTIME TYPE PATH REL TARGET: print one listing line,
+# "<mode> <links> <owner> <group> <size> <mtime> <rel>[ -> <target>]". REL is relative to the
+# listed directory ("." for itself); PATH is the full path. A link whose target is never shared
+# shows "[never shared]" instead of the target.
+format_entry() {
+	local mode=$1 links=$2 owner=$3 group=$4 size=$5 mtime=$6 type=$7 path=$8 rel=${9:-.} target=${10}
+	escape_name "${owner}" owner
+	escape_name "${group}" group
+	escape_name "${rel}" rel
+	printf '%s %s %s %s %s %s %s' "${mode}" "${links}" "${owner}" "${group}" "${size}" "${mtime}" "${rel}"
+	if [[ ${type} == l ]]; then
+		if link_target_denied "${path}" "${target}"; then
+			printf ' -> [never shared]'
+		else
+			escape_name "${target}" target
+			printf ' -> %s' "${target}"
+		fi
+	fi
+	printf '\n'
+}
+
+# list_dir DIR DEPTH DENIED_FILES DENIED_DIRS OUT: write the listing of DIR, DEPTH levels deep, to
+# OUT. find -P never follows a link; it prunes the never-share entries, stops after LIST_TIMEOUT
+# seconds, and is cut after MAX_ENTRIES entries. Entries that are never shared by name, a hard link
+# to a never-share file, a never-share directory mounted here, or below such a directory are
+# omitted and only counted. A find failure other than unreadable entries fails the listing. The
+# scratch files sit next to OUT (in the root-owned share dir) and are removed.
+list_dir() {
+	local dir=$1 depth=$2 denied_files=$3 denied_dirs=$4 out=$5 raw lines status=0 head_status=0
+	local tag mode links owner group size mtime ident type rel target path prefix skip key
+	local entries=0 omitted=0 truncated=0
+	local -a prune pipe omitted_dirs=()
+	local -A files_denied=() dirs_denied=()
+	for ident in ${denied_files}; do files_denied[${ident}]=1; done
+	for ident in ${denied_dirs}; do dirs_denied[${ident}]=1; done
+	mapfile -d '' -t prune < <(list_prune_args)
+	raw=${out}.raw
+	lines=${out}.lines
+	# 11 NUL-terminated fields per entry; a pruned entry is tagged P and carries only its name.
+	if timeout -k 5 "${LIST_TIMEOUT}" find -P "${dir}" -mindepth 0 -maxdepth "${depth}" \
+		\( "${prune[@]}" \) -printf 'P\0\0\0\0\0\0\0\0\0%P\0\0' -prune \
+		-o -printf 'E\0%M\0%n\0%u\0%g\0%s\0%TY-%Tm-%Td %TH:%TM\0%D:%i\0%y\0%P\0%l\0' 2>/dev/null |
+		(umask 077 && head -z -n "$(((MAX_ENTRIES + 1) * 11))" >"${raw}"); then
+		:
+	else
+		pipe=("${PIPESTATUS[@]}")
+		status=${pipe[0]}
+		head_status=${pipe[1]:-1}
+	fi
+	if ((head_status != 0)); then
+		echo "pi-share: listing failed: ${dir}" >&2
+		return 1
+	fi
+	# 1: some entries could not be read; 124: timed out; 141 (SIGPIPE): cut short by head.
+	case ${status} in
+	0 | 1 | 124 | 141) ;;
+	*)
+		echo "pi-share: listing failed (find exit ${status}): ${dir}" >&2
+		return 1
+		;;
+	esac
+	while IFS= read -r -d '' tag && IFS= read -r -d '' mode && IFS= read -r -d '' links &&
+		IFS= read -r -d '' owner && IFS= read -r -d '' group && IFS= read -r -d '' size &&
+		IFS= read -r -d '' mtime && IFS= read -r -d '' ident && IFS= read -r -d '' type &&
+		IFS= read -r -d '' rel && IFS= read -r -d '' target; do
+		if ((entries == MAX_ENTRIES)); then
+			truncated=1
+			break
+		fi
+		entries=$((entries + 1))
+		if [[ -z ${rel} ]]; then
+			path=${dir}
+		elif [[ ${dir} == / ]]; then
+			path=/${rel}
+		else
+			path=${dir}/${rel}
+		fi
+		skip=0
+		for prefix in "${omitted_dirs[@]}"; do
+			if [[ ${path} == "${prefix}"/* ]]; then
+				skip=1
+				break
+			fi
+		done
+		if ((skip == 1)); then
+			omitted=$((omitted + 1))
+			continue
+		fi
+		if [[ ${tag} != E ]] || is_denied "${path}" ||
+			[[ ${type} == f && -n ${files_denied[${ident}]-} ]] ||
+			[[ ${type} == d && -n ${dirs_denied[${ident}]-} ]]; then
+			omitted=$((omitted + 1))
+			[[ ${type} == d ]] && omitted_dirs+=("${path}")
+			continue
+		fi
+		escape_name "${rel}" key
+		printf '%s\t' "${key}"
+		format_entry "${mode}" "${links}" "${owner}" "${group}" "${size}" "${mtime}" \
+			"${type}" "${path}" "${rel}" "${target}"
+	done <"${raw}" >"${lines}" || {
+		echo "pi-share: listing failed: ${dir}" >&2
+		return 1
+	}
+	# Sorted by the (escaped) relative path; the key is cut off again.
+	if ! LC_ALL=C sort -s -t $'\t' -k1,1 -o "${raw}" -- "${lines}"; then
+		echo "pi-share: listing failed: ${dir}" >&2
+		return 1
+	fi
+	if ! {
+		printf '# pi-share listing of %s, depth %s\n' "${dir}" "${depth}" &&
+			cut -f2- -- "${raw}"
+	} >"${out}"; then
+		echo "pi-share: listing failed: ${dir}" >&2
+		return 1
+	fi
+	if ! {
+		if ((omitted > 0)); then
+			printf '# %s entries omitted (never shared)\n' "${omitted}"
+		fi
+		if ((truncated == 1)); then
+			printf '# truncated at %s entries\n' "${MAX_ENTRIES}"
+		fi
+		if ((status == 124)); then
+			printf '# stopped after %s s; the listing is incomplete\n' "${LIST_TIMEOUT}"
+		fi
+		if ((status == 1)); then
+			printf '# some entries could not be read\n'
+		fi
+		:
+	} >>"${out}"; then
+		echo "pi-share: listing failed: ${dir}" >&2
+		return 1
+	fi
+	rm -f -- "${raw}" "${lines}" || return 1
+}
+
+# list_dirs SHARE DEPTH DENIED_FILES DENIED_DIRS DIR...: write the listing of each DIR to
+# SHARE/listing-<i> (root-owned 0400), within the size limit for all of them together.
+list_dirs() {
+	local share=$1 depth=$2 denied_files=$3 denied_dirs=$4 i=0 out size total=0 target
+	shift 4
+	for target in "$@"; do
+		out=${share}/listing-${i}
+		(umask 077 && list_dir "${target}" "${depth}" "${denied_files}" "${denied_dirs}" "${out}") ||
+			return 1
+		chmod 0400 -- "${out}" || return 1
+		size=$(stat -c '%s' -- "${out}") || return 1
+		total=$((total + size))
+		if ((total > MAX_BYTES)); then
+			echo "pi-share: size limit exceeded (50 MB): listing of ${target}" >&2
+			return 1
+		fi
+		i=$((i + 1))
+	done
 }
 
 # copy_files DIR RESOLVED...: copy each file below DIR (root-owned, 0400) within the size limit.
@@ -557,7 +821,7 @@ unit_expiry() {
 }
 
 main() {
-	local duration=${DEFAULT_DURATION} pid="" file uid gid started expires gitleaks
+	local duration=${DEFAULT_DURATION} pid="" file uid gid started expires gitleaks list=0 depth=""
 	# Never the caller's PATH: sudo keeps it unless sudoers sets secure_path.
 	PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 	export PATH
@@ -573,6 +837,15 @@ main() {
 			pid=$2
 			shift 2
 			;;
+		--list)
+			list=1
+			shift
+			;;
+		--depth)
+			(($# >= 2)) || usage
+			depth=$(parse_depth "$2") || exit 2
+			shift 2
+			;;
 		--)
 			shift
 			break
@@ -581,6 +854,11 @@ main() {
 		esac
 	done
 	(($# >= 1)) || usage
+	if [[ -n ${depth} ]] && ((list == 0)); then
+		echo "pi-share: --depth needs --list" >&2
+		usage
+	fi
+	depth=${depth:-1}
 
 	((EUID == 0)) || die "must run as root (through sudo)"
 	uid=${SUDO_UID:-}
@@ -596,16 +874,28 @@ main() {
 
 	# Validate everything first. The never-share identities are collected once for all files:
 	# that is a find over /var/lib/docker and friends, too slow to repeat per file.
-	local line total=0 size resolved_files=() requested=() denied
+	# A listing is written by pi-share itself, as <share dir>/listing-<i>: resolved_files then holds
+	# those names (relative to the share dir, like the copies), and dirs the directories to list.
+	local line total=0 size resolved_files=() requested=() dirs=() denied denied_dirs=""
 	denied=$(denied_identities)
-	for file in "$@"; do
-		line=$(check_file "${file}" "${uid}" "${gid}" "${denied}") || exit 1
-		resolved_files+=("${line%%$'\t'*}")
-		requested+=("${file}")
-		size=${line##*$'\t'}
-		total=$((total + size))
-	done
-	((total <= MAX_BYTES)) || die "files total ${total} bytes; the limit is ${MAX_BYTES} (50 MB)"
+	if ((list == 1)); then
+		denied_dirs=$(denied_identities d)
+		for file in "$@"; do
+			line=$(check_dir "${file}" "${uid}" "${gid}" "${denied_dirs}") || exit 1
+			dirs+=("${line}")
+			resolved_files+=("/listing-${#requested[@]}")
+			requested+=("${file}")
+		done
+	else
+		for file in "$@"; do
+			line=$(check_file "${file}" "${uid}" "${gid}" "${denied}") || exit 1
+			resolved_files+=("${line%%$'\t'*}")
+			requested+=("${file}")
+			size=${line##*$'\t'}
+			total=$((total + size))
+		done
+		((total <= MAX_BYTES)) || die "files total ${total} bytes; the limit is ${MAX_BYTES} (50 MB)"
+	fi
 
 	# Create the share dir, then the cleanup unit, then copy.
 	install -d -m 0711 -o root -g root -- "${SHARE_ROOT}"
@@ -629,7 +919,13 @@ main() {
 		rm -rf --one-file-system -- "${dir}"
 		die "could not start the cleanup service"
 	fi
-	if ! copy_files "${dir}" "${resolved_files[@]}"; then
+	if ((list == 1)); then
+		if ! list_dirs "${dir}" "${depth}" "${denied}" "${denied_dirs}" "${dirs[@]}"; then
+			systemctl stop "${unit}.service" || true
+			rm -rf --one-file-system -- "${dir}"
+			die "listing failed; nothing shared"
+		fi
+	elif ! copy_files "${dir}" "${resolved_files[@]}"; then
 		systemctl stop "${unit}.service" || rm -rf --one-file-system -- "${dir}"
 		die "copy failed; nothing shared"
 	fi
