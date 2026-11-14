@@ -88,6 +88,7 @@ function shQuote(s: string): string {
  * The status file is written before sudo starts, so a popup closed with Ctrl+C counts as a refusal,
  * not as a missing popup. No abort signal: killing the tmux client would leave the popup asking
  * for a password whose result nobody reads, so an aborted call waits for the popup to close.
+ * No popup title (-T): that needs tmux 3.3, popups only 3.2, and the description names pi-read.
  */
 export async function runTmuxPopup(
 	description: string,
@@ -112,7 +113,7 @@ export async function runTmuxPopup(
 		].join("\n");
 		const scriptPath = join(dir, "run.sh");
 		writeFileSync(scriptPath, script, { mode: 0o600 });
-		await collect(options.tmux ?? "tmux", ["display-popup", "-E", "-T", "pi-read", `sh ${shQuote(scriptPath)}`], {});
+		await collect(options.tmux ?? "tmux", ["display-popup", "-E", `sh ${shQuote(scriptPath)}`], {});
 		let code: number;
 		try {
 			code = Number.parseInt(readFileSync(status, "utf8").trim(), 10);

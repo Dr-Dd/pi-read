@@ -22,9 +22,10 @@ test("runTmuxPopup returns the status file's exit code, stdout and stderr", asyn
 		// Exit code 3: the final `echo $? > status` replaced the 130 written before sudo started.
 		assert.deepEqual(result, { code: 3, stdout: "req\tcopy\n", stderr: "warning\n" });
 		const args = readFileSync(log, "utf8").trimEnd().split("\n");
-		assert.equal(args.length, 5);
-		assert.deepEqual(args.slice(0, 4), ["display-popup", "-E", "-T", "pi-read"]);
-		assert.match(args[4] ?? "", /^sh '.*\/run\.sh'$/);
+		// No -T (popup title): it needs tmux 3.3, while popups exist since 3.2.
+		assert.equal(args.length, 3);
+		assert.deepEqual(args.slice(0, 2), ["display-popup", "-E"]);
+		assert.match(args[2] ?? "", /^sh '.*\/run\.sh'$/);
 	} finally {
 		fakes.cleanup();
 	}
