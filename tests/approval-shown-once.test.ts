@@ -24,6 +24,7 @@ function loadTool(): RuntimeTool {
 			registerTool: (tool: ToolDefinition) => {
 				registered = tool;
 			},
+			on: () => {},
 		} as unknown as ExtensionAPI,
 		{ helperProblem: () => undefined },
 	);

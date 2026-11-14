@@ -9,6 +9,7 @@ import piRead from "../src/index.ts";
 import { makeFakes, pathWith, withEnv } from "./helpers.ts";
 
 const repoPiShare = fileURLToPath(new URL("../bin/pi-share", import.meta.url));
+const installScript = fileURLToPath(new URL("../install.sh", import.meta.url));
 
 test("the shipped pi-share is the repo's bin/pi-share", () => {
 	assert.equal(BUNDLED_PI_SHARE, repoPiShare);
@@ -72,8 +73,9 @@ test("execute reports a pi-share problem before sudo is run", async () => {
 				registerTool: (tool: ToolDefinition) => {
 					registered = tool;
 				},
+				on: () => {},
 			} as unknown as ExtensionAPI,
-			{ helperProblem: () => "pi-share is stale" },
+			{ helperProblem: () => ({ problem: "pi-share is stale", again: false }) },
 		);
 		const tool = registered as unknown as {
 			execute(...args: unknown[]): Promise<{ isError?: boolean; content: { text: string }[]; details: object }>;
@@ -83,7 +85,7 @@ test("execute reports a pi-share problem before sudo is run", async () => {
 			tool.execute("id", { files: ["/etc/x"], reason: "because" }, undefined, undefined, ctx),
 		);
 		assert.equal(result.isError, true);
-		assert.equal(result.content[0]?.text, "request_root_read: pi-share is stale");
+		assert.equal(result.content[0]?.text, `request_root_read: pi-share is stale. Ask the user to run ${installScript}`);
 		assert.deepEqual(result.details, {});
 		assert.throws(() => readFileSync(marker), /ENOENT/);
 	} finally {

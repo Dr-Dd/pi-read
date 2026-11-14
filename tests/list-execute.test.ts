@@ -31,6 +31,7 @@ function loadTools(): Map<string, RuntimeTool> {
 			registerTool: (tool: ToolDefinition) => {
 				tools.set(tool.name, tool as unknown as RuntimeTool);
 			},
+			on: () => {},
 		} as unknown as ExtensionAPI,
 		{ helperProblem: () => undefined },
 	);

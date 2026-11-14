@@ -155,12 +155,17 @@ copy, at the path above): it changes system files. It never runs `pi` itself. It
 never-share list only when none is installed yet; your edits are never overwritten (it tells you when
 your list differs from the shipped defaults).
 
+Until `install.sh` has run, pi shows a warning when it starts (and after `/reload`) that names what is
+missing and the full path of the `install.sh` to run. The warning only tells you; it never runs
+`install.sh` or sudo.
+
 ### Updating
 
 Update the extension with `pi update --extensions` (or `pi update git:github.com/Dr-Dd/pi-read`), then
 run `~/.pi/agent/git/github.com/Dr-Dd/pi-read/install.sh` again. `pi-share` is a root-owned copy, so it stays
-at the old version until `install.sh` runs again. The extension notices the difference and refuses
-requests, telling the agent to ask you for this.
+at the old version until `install.sh` runs again. The extension notices the difference: pi warns you
+when it starts or after `/reload`, naming the `install.sh` to run, and the extension refuses requests
+until then, telling the agent to ask you for this.
 
 ### Uninstalling
 

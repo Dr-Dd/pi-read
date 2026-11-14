@@ -6,7 +6,7 @@
 import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { PI_SHARE_PATH } from "./config.ts";
-import { helperProblem, neverShareProblem } from "./helper.ts";
+import { forAgent, forUser, type InstallProblem, installProblem } from "./helper.ts";
 import { choosePromptMethods, findAskpass, type PromptMethod, pathWhich } from "./prompt.ts";
 import {
 	describeListRequest,
@@ -165,11 +165,21 @@ export interface PiReadOptions {
 	 * Why the installed pi-share or never-share list cannot be used, if so. Tests replace it: they run
 	 * no real pi-share.
 	 */
-	helperProblem?: () => string | undefined;
+	helperProblem?: () => InstallProblem | undefined;
 }
 
+/** session_start reasons that warn: pi starting, and /reload (when a fresh pi update takes effect). */
+const WARN_REASONS = new Set(["startup", "reload"]);
+
 export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): void {
-	const checkHelper = options.helperProblem ?? (() => helperProblem() ?? neverShareProblem());
+	const checkHelper = options.helperProblem ?? (() => installProblem());
+	// Tell the user when install.sh has to run, before the agent's first request fails. Only tells:
+	// running install.sh needs the user's sudo password.
+	pi.on("session_start", (event, ctx) => {
+		if (!ctx.hasUI || !WARN_REASONS.has(event.reason)) return;
+		const problem = checkHelper();
+		if (problem) ctx.ui.notify(forUser(problem), "warning");
+	});
 	// Registered before request_root_read: tests that load one tool take the last one registered.
 	pi.registerTool({
 		name: "request_root_list",
@@ -192,7 +202,7 @@ export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): v
 				return fail(`request_root_list: ${(err as Error).message}`);
 			}
 			const problem = checkHelper();
-			if (problem) return fail(`request_root_list: ${problem}`);
+			if (problem) return fail(`request_root_list: ${forAgent(problem)}`);
 			const approval = { description: describeListRequest(req), askpassPrompt: listPrompt(req) };
 			const command = [PI_SHARE_PATH, ...listArgs(req, process.pid)];
 			return share("request_root_list", approval, command, req.duration, formatListResult, ctx, signal);
@@ -221,7 +231,7 @@ export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): v
 				return fail(`request_root_read: ${(err as Error).message}`);
 			}
 			const problem = checkHelper();
-			if (problem) return fail(`request_root_read: ${problem}`);
+			if (problem) return fail(`request_root_read: ${forAgent(problem)}`);
 			const approval = { description: describeRequest(req), askpassPrompt: sudoPrompt(req) };
 			const command = [PI_SHARE_PATH, ...shareArgs(req, process.pid)];
 			return share("request_root_read", approval, command, req.duration, formatResult, ctx, signal);
