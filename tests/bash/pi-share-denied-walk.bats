@@ -120,9 +120,9 @@ stub() {
 	}
 	export VICTIM="$t/root"
 	fill
-	STRIP=1 walk 'PATH="$STUBS:$PATH" denied_identities' "$t/root"
-	[ "$status" -eq 1 ]
-	[[ $output == *"never-share walk of $t/root failed"* ]]
+	run env STRIP=1 PATH="$STUBS:$PATH" find -H "$t/root" -xdev -ignore_readdir_race -type f -printf '%D:%i\n'
+	[ "$status" -ne 0 ]
+	[[ $output == *"No such file or directory"* ]]
 	fill
 	walk 'PATH="$STUBS:$PATH" denied_identities' "$t/root"
 	[ "$status" -eq 0 ]

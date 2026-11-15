@@ -5,7 +5,8 @@
 # --map-root-user), where the test is root, and inside it:
 #   - mounts a root-owned 0755 tmpfs on /mnt that holds every sandbox file;
 #   - bind-mounts a setuid-root copy of sudo over /usr/bin/sudo and a root-owned copy of its
-#     plugins over /usr/lib/sudo;
+#     plugins over their directory (the first of SANDBOX_SUDO_PLUGIN_DIRS, by default
+#     /usr/libexec/sudo then /usr/lib/sudo, that holds sudoers.so; none fails the test);
 #   - bind-mounts sandbox /etc/passwd, /etc/group, /etc/sudoers, /etc/sudo.conf and
 #     /etc/pam.d/sudo (pam_permit: no password) and an empty /etc/sudoers.d;
 #   - mounts a fresh tmpfs on /run, so /run/pi-share starts out absent;
@@ -59,13 +60,26 @@ sandbox() {
 	# shellcheck disable=SC2016 # expanded by the inner bash
 	unshare --map-auto --map-root-user --mount --pid --fork --mount-proc \
 		env SANDBOX_INSTALL="${install}" \
+		SANDBOX_SUDO_PLUGIN_DIRS="${SANDBOX_SUDO_PLUGIN_DIRS:-/usr/libexec/sudo /usr/lib/sudo}" \
 		bash -c 'set -e; source "$1"; sandbox_setup "$2"; sandbox_eval "$3"' _ \
 		"${SANDBOX_HELPER}" "${pi_share}" "$1"
 }
 
 sandbox_setup() {
-	local pi_share=$1 s=/mnt f defaults
+	local pi_share=$1 s=/mnt f defaults sudo_lib="" cand
 	set -e
+	# Where the sudo plugins live differs by distribution (Ubuntu: /usr/libexec/sudo, Arch:
+	# /usr/lib/sudo): take the first candidate that holds sudoers.so.
+	for cand in ${SANDBOX_SUDO_PLUGIN_DIRS}; do
+		if [[ -f ${cand}/sudoers.so ]]; then
+			sudo_lib=$(realpath -e -- "${cand}")
+			break
+		fi
+	done
+	if [[ -z ${sudo_lib} ]]; then
+		echo "sudo sandbox: no sudo plugin directory (sudoers.so) in: ${SANDBOX_SUDO_PLUGIN_DIRS}" >&2
+		return 1
+	fi
 	mount -t tmpfs -o mode=0755 tmpfs "${s}"
 	mkdir -p "${s}/sudo-lib" "${s}/etc" "${s}/bin" "${s}/stub" "${s}/log"
 	chmod 0755 "${s}/sudo-lib" "${s}/etc" "${s}/bin" "${s}/stub"
@@ -75,10 +89,10 @@ sandbox_setup() {
 	cp /usr/bin/sudo "${s}/sudo"
 	chown 0:0 "${s}/sudo"
 	chmod 4755 "${s}/sudo"
-	cp -a /usr/lib/sudo/. "${s}/sudo-lib/"
+	cp -a "${sudo_lib}/." "${s}/sudo-lib/"
 	chown -R 0:0 "${s}/sudo-lib"
 	mount --bind "${s}/sudo" /usr/bin/sudo
-	mount --bind "${s}/sudo-lib" /usr/lib/sudo
+	mount --bind "${s}/sudo-lib" "${sudo_lib}"
 
 	install -o 0 -g 0 -m 0755 -- "${pi_share}" "${s}/bin/pi-share"
 	defaults=$(dirname -- "${pi_share}")/../never-share.defaults

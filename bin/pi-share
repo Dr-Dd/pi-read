@@ -438,13 +438,33 @@ match_pattern() {
 	done
 }
 
+# walk_find ROOT TYPE FORMAT: run the never-share find over ROOT (under DENIED_WALK_TIMEOUT) for
+# entries of TYPE, printing each with FORMAT, and return find's status. find's stderr is never
+# shown (it can name files under never-share dirs). An entry that vanishes during the walk is not
+# a failure: -ignore_readdir_race covers that on findutils 4.11+, while 4.9 and 4.10 still report
+# some vanished entries as "No such file or directory" and exit 1. So status 1 counts as 0 when
+# every stderr line is that error. With LC_ALL=C the text is fixed, and find escapes newlines in
+# names, so each error is one line ending in its own strerror.
+walk_find() {
+	local root=$1 type=$2 format=$3 err line status=0
+	{ err=$(LC_ALL=C timeout -k 5 "${DENIED_WALK_TIMEOUT}" find -H "${root}" -xdev \
+		-ignore_readdir_race -type "${type}" -printf "${format}" 2>&1 >&3 3>&-) || status=$?; } 3>&1
+	if ((status == 1)) && [[ -n ${err} ]]; then
+		while IFS= read -r line; do
+			[[ ${line} == *"': No such file or directory" ]] || return 1
+		done <<<"${err}"
+		return 0
+	fi
+	return "${status}"
+}
+
 # denied_identities [TYPE]: print "dev:inode" of the existing never-share files (TYPE f, the
 # default), to catch hard links, or of the never-share directories (TYPE d), to catch bind mounts.
 # A literal entry is walked as is. A pattern is walked from pattern_base and each file is matched
 # against it (match_pattern). find -H follows an entry that is itself a link, so the file it names
 # is covered. Fails closed: a walk that times out (DENIED_WALK_TIMEOUT per entry) or fails makes
 # the whole list untrustworthy, so it fails, naming the entry. An entry that does not exist is not
-# walked, and files vanishing mid-walk (-ignore_readdir_race) are not a failure.
+# walked, and files vanishing mid-walk are not a failure (see walk_find).
 denied_identities() {
 	local type=${1:-f} name rest root base status
 	local -a pipe
@@ -458,15 +478,13 @@ denied_identities() {
 		if [[ ${root} != *[*?[]* ]]; then
 			[[ -e ${root} || -L ${root} ]] || continue
 			status=0
-			timeout -k 5 "${DENIED_WALK_TIMEOUT}" find -H "${root}" -xdev -ignore_readdir_race \
-				-type "${type}" -printf '%D:%i\n' 2>/dev/null || status=$?
+			walk_find "${root}" "${type}" '%D:%i\n' || status=$?
 			walk_status "${root}" "${status}" || return 1
 			continue
 		fi
 		base=$(pattern_base "${root}")
 		[[ -e ${base} || -L ${base} ]] || continue
-		if timeout -k 5 "${DENIED_WALK_TIMEOUT}" find -H "${base}" -xdev -ignore_readdir_race \
-			-type "${type}" -printf '%p\0%D:%i\0' 2>/dev/null | match_pattern "${root}"; then
+		if walk_find "${base}" "${type}" '%p\0%D:%i\0' | match_pattern "${root}"; then
 			status=0
 		else
 			pipe=("${PIPESTATUS[@]}")
