@@ -800,6 +800,91 @@ partial_sed() {
 	printf '%ss/.*/%s/\n' "${n}" "${new}"
 }
 
+# run_gitleaks BASE SCAN GITLEAKS: run GITLEAKS over the staged copies in SCAN with the report
+# template in BASE; print its report, write its stderr to BASE/stderr and return its exit status.
+# env -i: GITLEAKS_CONFIG* from the caller must not choose the rules. --exit-code 3 keeps
+# "found something" apart from the 1 gitleaks uses for a fatal error; --ignore-gitleaks-allow
+# stops a gitleaks:allow comment in a copied file from opting its line out. The ignore path does
+# not exist, so a .gitleaksignore in the caller's directory cannot suppress findings either.
+run_gitleaks() {
+	local base=$1 scan=$2 gitleaks=$3
+	env -i PATH="${PATH}" "${gitleaks}" dir \
+		--no-banner --no-color --log-level error \
+		--exit-code 3 \
+		--ignore-gitleaks-allow \
+		--gitleaks-ignore-path "${base}/.gitleaksignore" \
+		--report-format template \
+		--report-template "${base}/template" \
+		--report-path - \
+		-- "${scan}" 2>"${base}/stderr"
+}
+
+# stage_scan DIR SCAN RESOLVED...: hard-link the copy of each RESOLVED file into SCAN under its
+# index, replacing whatever SCAN held (sed -i gives a redacted copy a new inode, so links made
+# before the redaction still hold the original text).
+stage_scan() {
+	local dir=$1 scan=$2 i
+	shift 2
+	local -a resolved=("$@")
+	rm -rf --one-file-system -- "${scan}" || {
+		echo "pi-share: filtering failed: could not clear the scan dir; nothing shared" >&2
+		return 1
+	}
+	mkdir -m 0700 -- "${scan}" || {
+		echo "pi-share: filtering failed: could not create the scan dir; nothing shared" >&2
+		return 1
+	}
+	for i in "${!resolved[@]}"; do
+		ln -- "${dir}${resolved[i]}" "${scan}/${i}" || {
+			echo "pi-share: filtering failed: could not stage ${resolved[i]}; nothing shared" >&2
+			return 1
+		}
+	done
+}
+
+# check_secrets_gone DIR SCAN REPORT TMP RESOLVED...: fail when a secret from REPORT (gitleaks'
+# report for the copies staged under SCAN, already checked by plan_redactions) is still in the
+# redacted copy DIR/RESOLVED[index]. Only secrets that decode cleanly (see decode_b64) and are not
+# empty are searched for; rows without a secret are skipped. The secret goes to grep through the
+# scratch file TMP, never on a command line, and is never printed.
+check_secrets_gone() {
+	local LC_ALL=C
+	local dir=$1 scan=$2 report=$3 tmp=$4 line file index secret rest status
+	shift 4
+	local -a resolved=("$@") fields=()
+	while IFS= read -r line; do
+		[[ -z ${line} ]] && continue
+		fields=()
+		rest=${line}
+		while [[ ${rest} == *$'\t'* ]]; do
+			fields+=("${rest%%$'\t'*}")
+			rest=${rest#*$'\t'}
+		done
+		fields+=("${rest}")
+		((${#fields[@]} == 6)) || continue
+		file=${fields[0]} secret=${fields[4]}
+		index=${file#"${scan}/"}
+		if [[ ${file} != "${scan}/"* || ! ${index} =~ ^(0|[1-9][0-9]{0,8})$ ]] ||
+			((index >= ${#resolved[@]})); then
+			echo "pi-share: filtering failed: could not check the redaction; nothing shared" >&2
+			return 1
+		fi
+		[[ -n ${secret} ]] || continue
+		decode_b64 "${secret}" "${tmp}" >/dev/null || continue
+		[[ -s ${tmp} ]] || continue
+		status=0
+		grep -F -q -f "${tmp}" -- "${dir}${resolved[index]}" || status=$?
+		if ((status == 0)); then
+			echo "pi-share: filtering failed: a secret gitleaks reported is still in ${resolved[index]}; nothing shared" >&2
+			return 1
+		elif ((status != 1)); then
+			echo "pi-share: filtering failed: could not check the redaction of ${resolved[index]}; nothing shared" >&2
+			return 1
+		fi
+	done <<<"${report}"
+	rm -f -- "${tmp}"
+}
+
 # filter_files DIR GITLEAKS RESOLVED...: run GITLEAKS over the copies of the RESOLVED files and
 # replace every secret it flags with [REDACTED] (the whole line when the secret cannot be located
 # safely on it), all or nothing. The copies are hard-linked into
@@ -832,34 +917,13 @@ filter_files() {
 		echo "pi-share: filtering failed: could not create the filter dir; nothing shared" >&2
 		return 1
 	}
-	mkdir -m 0700 -- "${scan}" || {
-		echo "pi-share: filtering failed: could not create the scan dir; nothing shared" >&2
-		return 1
-	}
-	for i in "${!resolved[@]}"; do
-		ln -- "${dir}${resolved[i]}" "${scan}/${i}" || {
-			echo "pi-share: filtering failed: could not stage ${resolved[i]}; nothing shared" >&2
-			return 1
-		}
-	done
+	stage_scan "${dir}" "${scan}" "${resolved[@]}" || return 1
 	# One line per finding: the staged copy, then its first and last line.
 	printf '%s' "${REPORT_TEMPLATE}" >"${base}/template" || {
 		echo "pi-share: filtering failed: could not write the report template; nothing shared" >&2
 		return 1
 	}
-	# env -i: GITLEAKS_CONFIG* from the caller must not choose the rules. --exit-code 3 keeps
-	# "found something" apart from the 1 gitleaks uses for a fatal error; --ignore-gitleaks-allow
-	# stops a gitleaks:allow comment in a copied file from opting its line out. The ignore path does
-	# not exist, so a .gitleaksignore in the caller's directory cannot suppress findings either.
-	output=$(env -i PATH="${PATH}" "${gitleaks}" dir \
-		--no-banner --no-color --log-level error \
-		--exit-code 3 \
-		--ignore-gitleaks-allow \
-		--gitleaks-ignore-path "${base}/.gitleaksignore" \
-		--report-format template \
-		--report-template "${base}/template" \
-		--report-path - \
-		-- "${scan}" 2>"${base}/stderr") || status=$?
+	output=$(run_gitleaks "${base}" "${scan}" "${gitleaks}") || status=$?
 	if [[ ${status} != 0 && ${status} != 3 ]] || [[ ${status} == 3 && -z ${output} ]]; then
 		why=$(report_text "${base}/stderr")
 		# Exit 3 with nothing listed is a contradiction, not a clean scan.
@@ -942,6 +1006,28 @@ filter_files() {
 			fi
 			files=$((files + 1))
 		done
+		# gitleaks' line numbers are trusted above; check the result instead. Every secret that was
+		# reported must be gone from its copy, and gitleaks must find nothing in the redacted copies.
+		# Either way, a miss shares nothing.
+		check_secrets_gone "${dir}" "${scan}" "${output}" "${base}/tmp" "${resolved[@]}" || return 1
+		stage_scan "${dir}" "${scan}" "${resolved[@]}" || return 1
+		status=0
+		output=$(run_gitleaks "${base}" "${scan}" "${gitleaks}") || status=$?
+		if [[ ${status} != 0 && ${status} != 3 ]]; then
+			why=$(report_text "${base}/stderr")
+			if [[ -n ${why} ]]; then
+				printf 'pi-share: filtering failed (gitleaks exit %s on the re-scan); nothing shared: %s\n' \
+					"${status}" "${why}" >&2
+			else
+				printf 'pi-share: filtering failed (gitleaks exit %s on the re-scan); nothing shared\n' \
+					"${status}" >&2
+			fi
+			return 1
+		fi
+		if [[ ${status} == 3 || -n ${output} ]]; then
+			echo "pi-share: filtering failed: gitleaks still flags the redacted copies; nothing shared" >&2
+			return 1
+		fi
 	fi
 	if ! rm -rf --one-file-system -- "${base}"; then
 		echo "pi-share: filtering failed: could not remove the filter dir; nothing shared" >&2
