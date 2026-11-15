@@ -334,10 +334,11 @@ user_can_write() {
 	return 0
 }
 
-# check_file FILE UID GID DENIED: validate one file; print its resolved path and size
-# ("path<TAB>size"). DENIED is the precomputed output of denied_identities.
-check_file() {
-	local file=$1 uid=$2 gid=$3 denied=$4 resolved dir identity size
+# check_path KIND FILE UID GID DENIED: the checks check_file and check_dir share; print the resolved
+# path. KIND is f (a regular file) or d (a directory). DENIED is the precomputed output of
+# denied_identities (d for a directory, so a bind mount of a never-share directory is refused too).
+check_path() {
+	local kind=$1 file=$2 uid=$3 gid=$4 denied=$5 resolved dir identity
 	validate_path "${file}" || return 1
 	if is_denied "${file}"; then
 		echo "pi-share: refused (never shared): ${file}" >&2
@@ -351,72 +352,21 @@ check_file() {
 		printf 'pi-share: refused (control character): %q -> %q\n' "${file}" "${resolved}" >&2
 		return 1
 	fi
-	if is_denied "${resolved}" || is_swap_device "${resolved}"; then
+	if is_denied "${resolved}" || { [[ ${kind} == f ]] && is_swap_device "${resolved}"; }; then
 		echo "pi-share: refused (never shared): ${file} -> ${resolved}" >&2
 		return 1
 	fi
-	# Only the path as requested is shown to the user for approval, so it must be the file itself:
+	# Only the path as requested is shown to the user for approval, so it must be the path itself:
 	# a link (which the user's own programs could have made) would show one name and copy another.
 	if [[ ${resolved} != "${file}" ]]; then
 		echo "pi-share: refused (a link, or not a canonical path): ${file}; request ${resolved} itself" >&2
 		return 1
 	fi
-	if [[ ! -f ${resolved} ]]; then
+	if [[ ${kind} == f && ! -f ${resolved} ]]; then
 		echo "pi-share: not a regular file: ${file}" >&2
 		return 1
 	fi
-	identity=$(stat -c '%d:%i' -- "${resolved}") || {
-		echo "pi-share: cannot examine: ${file}" >&2
-		return 1
-	}
-	if is_denied_identity "${identity}" "${denied}"; then
-		echo "pi-share: refused (never shared, linked): ${file}" >&2
-		return 1
-	fi
-	# The user must not be able to alter the file or any directory above it.
-	dir=${resolved}
-	while :; do
-		if user_can_write "${dir}" "${uid}" "${gid}"; then
-			echo "pi-share: refused (writable by you): ${file} (${dir})" >&2
-			return 1
-		fi
-		[[ ${dir} == / ]] && break
-		dir=$(dirname -- "${dir}") || return 1
-	done
-	size=$(stat -c '%s' -- "${resolved}") || {
-		echo "pi-share: cannot examine: ${file}" >&2
-		return 1
-	}
-	printf '%s\t%s\n' "${resolved}" "${size}"
-}
-
-# check_dir DIR UID GID DENIED_DIRS: validate one directory to list; print its resolved path.
-# The same rules as check_file; DENIED_DIRS is the output of `denied_identities d`, so a bind
-# mount of a never-share directory is refused too.
-check_dir() {
-	local file=$1 uid=$2 gid=$3 denied=$4 resolved dir identity
-	validate_path "${file}" || return 1
-	if is_denied "${file}"; then
-		echo "pi-share: refused (never shared): ${file}" >&2
-		return 1
-	fi
-	resolved=$(realpath -e -- "${file}") || {
-		echo "pi-share: cannot resolve: ${file}" >&2
-		return 1
-	}
-	if has_control_char "${resolved}"; then
-		printf 'pi-share: refused (control character): %q -> %q\n' "${file}" "${resolved}" >&2
-		return 1
-	fi
-	if is_denied "${resolved}"; then
-		echo "pi-share: refused (never shared): ${file} -> ${resolved}" >&2
-		return 1
-	fi
-	if [[ ${resolved} != "${file}" ]]; then
-		echo "pi-share: refused (a link, or not a canonical path): ${file}; request ${resolved} itself" >&2
-		return 1
-	fi
-	if [[ ! -d ${resolved} ]]; then
+	if [[ ${kind} == d && ! -d ${resolved} ]]; then
 		echo "pi-share: not a directory: ${file}" >&2
 		return 1
 	fi
@@ -425,9 +375,14 @@ check_dir() {
 		return 1
 	}
 	if is_denied_identity "${identity}" "${denied}"; then
-		echo "pi-share: refused (never shared, mounted elsewhere): ${file}" >&2
+		if [[ ${kind} == f ]]; then
+			echo "pi-share: refused (never shared, linked): ${file}" >&2
+		else
+			echo "pi-share: refused (never shared, mounted elsewhere): ${file}" >&2
+		fi
 		return 1
 	fi
+	# The user must not be able to alter the path or any directory above it.
 	dir=${resolved}
 	while :; do
 		if user_can_write "${dir}" "${uid}" "${gid}"; then
@@ -438,6 +393,24 @@ check_dir() {
 		dir=$(dirname -- "${dir}") || return 1
 	done
 	printf '%s\n' "${resolved}"
+}
+
+# check_file FILE UID GID DENIED: validate one file; print its resolved path and size
+# ("path<TAB>size"). DENIED is the precomputed output of denied_identities.
+check_file() {
+	local file=$1 resolved size
+	resolved=$(check_path f "$@") || return 1
+	size=$(stat -c '%s' -- "${resolved}") || {
+		echo "pi-share: cannot examine: ${file}" >&2
+		return 1
+	}
+	printf '%s\t%s\n' "${resolved}" "${size}"
+}
+
+# check_dir DIR UID GID DENIED_DIRS: validate one directory to list; print its resolved path.
+# The same rules as check_file; DENIED_DIRS is the output of `denied_identities d`.
+check_dir() {
+	check_path d "$@"
 }
 
 # list_prune_args: print, NUL-separated, the find expression matching every built-in and
