@@ -12,8 +12,9 @@
 # It trusts nothing from the caller's environment: the shebang names bash by its full path and
 # main sets PATH itself, so it does not depend on sudoers setting secure_path.
 #
-# Design: the share tree stays root-owned while root writes it, so root never writes into a path
-# the user controls. It is handed to the user (chown -h) as the very last step.
+# Design: the share tree stays root-owned for its whole life, so root never writes into a path the
+# user controls and the user can neither change the copies nor add files to /run. As the very last
+# step its directories become 0711 and each file gets an ACL entry letting the user read it.
 #
 # Tests source this file to call its functions; main only runs when it is executed.
 
@@ -680,7 +681,7 @@ list_dir() {
 }
 
 # list_dirs SHARE DEPTH DENIED_FILES DENIED_DIRS DIR...: write the listing of each DIR to
-# SHARE/listing-<i> (root-owned 0400), within the size limit for all of them together.
+# SHARE/listing-<i> (root-owned 0400; grant_read adds the user's ACL at the end), within the size limit for all of them together.
 list_dirs() {
 	local share=$1 depth=$2 denied_files=$3 denied_dirs=$4 i=0 out size total=0 target
 	shift 4
@@ -716,6 +717,16 @@ copy_files() {
 		remaining=$((remaining - copied))
 		chmod 0400 -- "${dst}" || return 1
 	done
+}
+
+# grant_read DIR UID: the share tree stays root's; make every directory in DIR root 0711 (the user
+# can reach a copy by its path, but not list, add, rename or remove anything) and give UID read
+# access to every file through an ACL entry (the file stays root 0400 for everyone else). Owning a
+# copy would let the user chmod it writable and fill /run, so the files are never chowned.
+grant_read() {
+	local dir=$1 uid=$2
+	find -P "${dir}" -type d -exec chmod 0711 -- {} + || return 1
+	find -P "${dir}" -type f -exec setfacl -m "u:${uid}:r" -- {} + || return 1
 }
 
 # report_text FILE: the first line of FILE, control characters removed and cut short, so a
@@ -1310,10 +1321,11 @@ main() {
 	# RuntimeMaxSec counts from when the unit became active, which was before the copying above,
 	# so the copies go sooner than "now + duration". Report when the cleanup is really due.
 	expires=$(unit_expiry "${unit}" "${duration}" "${started}")
-	# Last step: hand the finished tree to the user (-h: never follow symlinks).
-	if ! chown -hR "${uid}:${gid}" -- "${dir}"; then
-		systemctl stop "${unit}.service" || rm -rf --one-file-system -- "${dir}"
-		die "could not hand over the copies; nothing shared"
+	# Last step: let the user read the finished tree, which stays root's.
+	if ! grant_read "${dir}" "${uid}"; then
+		systemctl stop "${unit}.service" || true
+		rm -rf --one-file-system -- "${dir}"
+		die "could not give you read access to the copies; nothing shared"
 	fi
 	local i
 	printf 'expires\t%s\n' "${expires}"

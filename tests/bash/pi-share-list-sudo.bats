@@ -13,7 +13,7 @@ SNIPPET_HELPERS='
 	body() { listing | grep -v "^#" | cut -d" " -f8-; }
 '
 
-@test "sudo: one-level listing: exact protocol, tester-owned 0400, . first, sorted, nothing deeper" {
+@test "sudo: one-level listing: exact protocol, root-owned 0440, . first, sorted, nothing deeper" {
 	run sandbox "$SNIPPET_HELPERS"'
 		make_file /mnt/data/b "B"
 		make_file /mnt/data/a "A"
@@ -24,7 +24,7 @@ SNIPPET_HELPERS='
 		[[ $(printf "%s\n" "$out" | sed -n 1p) =~ ^expires$'"'"'\t'"'"'[0-9]+$ ]]
 		[[ $(printf "%s\n" "$out" | sed -n 2p) =~ ^/mnt/data$'"'"'\t'"'"'/run/pi-share/1000-[0-9a-f]{16}/listing-0$ ]]
 		copy=$(printf "%s\n" "$out" | sed -n 2p | cut -f2)
-		[ "$(stat -c "%u:%g %a" "$copy")" = "1000:1000 400" ]
+		[ "$(stat -c "%u:%g %a" "$copy")" = "0:0 440" ]
 		[ "$(listing | head -n 1)" = "# pi-share listing of /mnt/data, depth 1" ]
 		[ "$(body | tr "\n" " ")" = ". a b sub " ]
 		[[ $(listing | sed -n 3p) =~ ^-rw-------\ 1\ root\ root\ 2\ [0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}\ a$ ]]

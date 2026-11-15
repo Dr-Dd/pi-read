@@ -17,7 +17,7 @@ pi-read sits in between. The agent asks for the files it needs; you see the requ
 
 1. **The agent asks.** It calls the `request_root_read` tool with the files it wants, how long it needs them, and why.
 2. **You approve.** pi shows you the request (files, duration, reason), then sudo asks for your password (see [Password prompt](#password-prompt)). Typing it approves the request; cancelling refuses it. By default sudo asks for the password for every request. If you turn on the remembered password (`install.sh --password-timeout`), a request on pi's terminal within that time asks Yes or No instead.
-3. **The files are copied and filtered.** A small root-owned script, `pi-share`, copies the files into `/run/pi-share/`, which lives in RAM, and runs [gitleaks](https://github.com/gitleaks/gitleaks) over the copies before anyone can read them: every secret gitleaks flags is replaced with `[REDACTED]` (its whole line when the secret cannot be located safely), so it never reaches the agent (see [Filtering](#filtering)). Only your user can read the copies. No real file is changed.
+3. **The files are copied and filtered.** A small root-owned script, `pi-share`, copies the files into `/run/pi-share/`, which lives in RAM, and runs [gitleaks](https://github.com/gitleaks/gitleaks) over the copies before anyone can read them: every secret gitleaks flags is replaced with `[REDACTED]` (its whole line when the secret cannot be located safely), so it never reaches the agent (see [Filtering](#filtering)). The copies stay owned by root: an ACL entry lets your user read them and nobody else, and you cannot change them or add files next to them. No real file is changed.
 4. **The agent reads the copies.** The tool tells the agent where each copy is, and it reads them with its normal tools.
 5. **The copies are deleted** when the time is up, or earlier if pi exits first. Both are enforced by a root systemd service that `pi-share` starts for each share, so they work even if pi crashes, and need no second password. `pi-share` asks that service when it is due and reports the real deadline, which is a little earlier than "now + duration", since the copying takes time. A reboot clears the copies too, because `/run` is emptied on every boot.
 
@@ -211,7 +211,7 @@ pi remove git:github.com/Dr-Dd/pi-read
 
 `--uninstall` keeps your never-share list; `--uninstall --purge` removes that too.
 
-Requirements: Linux with systemd, sudo, [gitleaks](https://github.com/gitleaks/gitleaks) 8.21.3 or newer,
+Requirements: Linux with systemd (its `/run` tmpfs needs ACL support, the default), sudo, `setfacl` (the `acl` package), [gitleaks](https://github.com/gitleaks/gitleaks) 8.21.3 or newer,
 and pi. gitleaks has to be root-owned and not writable by your user (a distribution package is fine);
 `install.sh` refuses to install without it, and `pi-share` refuses one it cannot trust. Optional: tmux
 3.2 or newer for popups, an askpass program for graphical prompts.
@@ -238,6 +238,7 @@ the git source, not next to it), then run `./install.sh` from the clone.
 **It does stop:**
 
 - the agent getting anything but read-only copies of the files you approved;
+- the agent changing the copies, or writing files of its own into `/run` to fill it;
 - the agent reading a secret gitleaks recognises: it is replaced with `[REDACTED]` (the whole line when it cannot be located safely);
 - the agent reading the files on the never-share list, even if you approve them;
 - other users on the machine reading the copies;

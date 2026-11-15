@@ -246,7 +246,8 @@ stub() {
 	load sudo-sandbox
 	require_sandbox
 	run sandbox '
-		printf "%s\n" "#!/bin/sh" "exit 1" >/mnt/stub/find
+		# Only the never-share walk fails: grant_read runs find on the share dir, so that goes to the real find.
+		printf "%s\n" "#!/bin/sh" "for a; do case \$a in /run/pi-share/*) exec /usr/bin/find \"\$@\";; esac; done" "exit 1" >/mnt/stub/find
 		install -o 0 -g 0 -m 0755 /mnt/stub/find /usr/local/bin/find
 		make_file /mnt/data/linked "L" 0600
 		ln /mnt/data/linked /mnt/data/linked-2
