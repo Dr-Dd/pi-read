@@ -16,6 +16,7 @@
 /etc/shadow*
 /etc/gshadow*
 /etc/security/opasswd*
+/var/backups/*shadow*
 
 # SSH host private keys
 /etc/ssh/ssh_host_*_key
@@ -24,6 +25,7 @@
 /etc/ssl/private
 /etc/letsencrypt/archive
 /etc/letsencrypt/live
+/etc/pki/tls/private
 
 # Other service secrets
 /etc/krb5.keytab
@@ -55,6 +57,9 @@
 /var/lib/samba/private
 /var/lib/sss
 /etc/libvirt/secrets
+/var/lib/tailscale
+/etc/kubernetes
+/var/lib/kubelet
 
 # Memory contents (swap devices are refused through /proc/swaps)
 /var/lib/systemd/coredump
@@ -62,3 +67,4 @@
 
 # Container storage
 /var/lib/docker
+/var/lib/containers

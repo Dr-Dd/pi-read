@@ -117,17 +117,17 @@ Durations are written the way `sleep` takes them: `90` or `90s` for seconds, `15
 
 Some files are effectively passwords. `pi-share` refuses them even if you approve them. By default these are:
 
-- password hashes: `/etc/shadow`, `/etc/gshadow`, `/etc/security/opasswd` and their backups
+- password hashes: `/etc/shadow`, `/etc/gshadow`, `/etc/security/opasswd` and their backups, including the copies in `/var/backups` (`/var/backups/*shadow*`)
 - SSH host private keys: `/etc/ssh/ssh_host_*_key`
-- TLS private keys: `/etc/ssl/private`, `/etc/letsencrypt/archive`, `/etc/letsencrypt/live`
+- TLS private keys: `/etc/ssl/private`, `/etc/letsencrypt/archive`, `/etc/letsencrypt/live`, `/etc/pki/tls/private`
 - other service secrets: `/etc/krb5.keytab`, `/etc/ipsec.secrets`, `/etc/ppp/*-secrets`
 - root's home folder: `/root`
 - stored credentials and disk keys: `/etc/credstore`, `/etc/credstore.encrypted`, `/etc/cryptsetup-keys.d`, `/var/lib/systemd/credential.secret`, `/run/credentials`
 - network secrets: `/etc/wireguard`, `/etc/NetworkManager/system-connections`, `/run/NetworkManager/system-connections`, `/etc/wpa_supplicant`, `/var/lib/iwd`, `/var/lib/bluetooth`
 - the package signing keyring: `/etc/pacman.d/gnupg`
-- directory service and virtualisation state: `/var/lib/samba/private`, `/var/lib/sss`, `/etc/libvirt/secrets`
+- directory service and virtualisation state: `/var/lib/samba/private`, `/var/lib/sss`, `/etc/libvirt/secrets`, `/var/lib/tailscale`, `/etc/kubernetes`, `/var/lib/kubelet`
 - memory contents: `/var/lib/systemd/coredump` and `/swapfile`
-- `/var/lib/docker`
+- container storage: `/var/lib/docker`, `/var/lib/containers`
 
 The list is a root-owned file, `/usr/local/etc/pi-read/never-share.list`, and you change it by editing that file as root:
 
@@ -135,7 +135,7 @@ The list is a root-owned file, `/usr/local/etc/pi-read/never-share.list`, and yo
 sudoedit /usr/local/etc/pi-read/never-share.list
 ```
 
-Changes apply from the next request; there is nothing to re-run. Each line is one absolute path, and it refuses that path and everything below it. `*`, `?` and `[...]` work as in the shell, except that `*` also crosses `/`. Blank lines and lines starting with `#` are ignored. `install.sh` creates the file from the shipped defaults in [`never-share.defaults`](never-share.defaults) when none is installed. Don't edit `never-share.defaults`: nothing reads it after that. To compare your list with the defaults, or go back to them:
+Changes apply from the next request; there is nothing to re-run. Each line is one absolute path, and it refuses that path and everything below it. `*`, `?` and `[...]` work as in the shell, except that `*` also crosses `/`. Blank lines and lines starting with `#` are ignored. `install.sh` creates the file from the shipped defaults in [`never-share.defaults`](never-share.defaults) when none is installed. Don't edit `never-share.defaults`: nothing reads it after that. The defaults grow over time, and an existing install keeps its own list, so after an update run `install.sh --reset-never-share` (this replaces your list, so reapply your own edits) or compare your list with the defaults. To compare your list with the defaults, or go back to them:
 
 ```sh
 sudo diff -u ~/.pi/agent/git/github.com/Dr-Dd/pi-read/never-share.defaults /usr/local/etc/pi-read/never-share.list
