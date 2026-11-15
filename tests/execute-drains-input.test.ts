@@ -58,7 +58,12 @@ test("the tui method stops the TUI, drains the input, runs sudo, then starts the
 	const fakes = makeFakes();
 	try {
 		const log = join(fakes.dir, "order.log");
-		fakes.write("sudo", `#!/bin/sh\necho sudo >> '${log}'\nprintf "req\\tcopy\\n"\n`);
+		// The remembered-password probe (sudo -n ... --probe) runs before the TUI stops: it reports
+		// "not remembered" without counting as the sudo run whose order this test checks.
+		fakes.write(
+			"sudo",
+			`#!/bin/sh\nfor a; do [ "$a" = --probe ] && exit 1; done\necho sudo >> '${log}'\nprintf "req\\tcopy\\n"\n`,
+		);
 		const record = (event: string) => () => appendFileSync(log, `${event}\n`);
 		const input: TerminalInput = {
 			isTTY: true,
@@ -96,7 +101,12 @@ test("a drain that throws fails the request with its error and starts the TUI ag
 	const fakes = makeFakes();
 	try {
 		const ran = join(fakes.dir, "sudo-ran");
-		fakes.write("sudo", `#!/bin/sh\ntouch '${ran}'\nprintf "req\\tcopy\\n"\n`);
+		// The remembered-password probe (sudo -n ... --probe) runs before the drain: it reports
+		// "not remembered" without counting as the sudo run this test checks for.
+		fakes.write(
+			"sudo",
+			`#!/bin/sh\nfor a; do [ "$a" = --probe ] && exit 1; done\ntouch '${ran}'\nprintf "req\\tcopy\\n"\n`,
+		);
 		const events: string[] = [];
 		const record = (event: string) => () => {
 			events.push(event);

@@ -70,7 +70,8 @@ test("execute runs the tui method on pi's terminal and reports it", async () => 
 	const fakes = makeFakes();
 	try {
 		const log = join(fakes.dir, "order.log");
-		// The fake sudo appends to the same log, so its order against stop/start is checked.
+		// The fake sudo appends to the same log, so its order against stop/start is checked. The first
+		// call is the probe for a remembered password (its output does not match, so no confirmation).
 		fakes.write("sudo", `#!/bin/sh\necho sudo >> '${log}'\nprintf "req\\tcopy\\n"\n`);
 		const record = (event: string) => () => appendFileSync(log, `${event}\n`);
 		const tui = {
@@ -98,7 +99,13 @@ test("execute runs the tui method on pi's terminal and reports it", async () => 
 		// runOnTerminal showed the request on pi's terminal between stopping and restarting the TUI.
 		assert.match(written, /pi-read: the agent asks to read these root-only files/);
 		assert.match(written, /\/etc\/x/);
-		assert.deepEqual(readFileSync(log, "utf8").trimEnd().split("\n"), ["stop", "sudo", "start", "requestRender"]);
+		assert.deepEqual(readFileSync(log, "utf8").trimEnd().split("\n"), [
+			"sudo",
+			"stop",
+			"sudo",
+			"start",
+			"requestRender",
+		]);
 	} finally {
 		fakes.cleanup();
 	}

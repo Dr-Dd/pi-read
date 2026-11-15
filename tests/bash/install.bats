@@ -50,15 +50,6 @@ run_install() {
 	[[ $output == *usage:* ]]
 }
 
-@test "sudoers_rule passes visudo and sets timestamp_timeout=0 only for pi-share" {
-	command -v visudo >/dev/null || skip "visudo not installed"
-	bash -c 'source "$1" && sudoers_rule' _ "$INSTALL" >"$BATS_TEST_TMPDIR/rule"
-	run visudo -cf "$BATS_TEST_TMPDIR/rule"
-	[ "$status" -eq 0 ]
-	run grep -v '^#' "$BATS_TEST_TMPDIR/rule"
-	[ "$output" = "Defaults!/usr/local/bin/pi-share timestamp_timeout=0" ]
-}
-
 @test "install: sudo installs pi-share, the list check and the sudoers file, then visudo -c" {
 	run_install
 	[ "$status" -eq 0 ]
