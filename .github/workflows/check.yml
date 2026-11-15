@@ -1,0 +1,40 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck shfmt tmux uidmap sudo
+          curl -fsSL -o /tmp/gitleaks.tgz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.21.3/gitleaks_8.21.3_linux_x64.tar.gz
+          sudo tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks
+          sudo chown root:root /usr/local/bin/gitleaks
+          npm ci
+
+      # The sudo bats tests build a sandbox with unprivileged user namespaces. They fail (never
+      # skip) when the runner cannot provide one, so say plainly here whether it can.
+      - name: Sudo sandbox probe
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          if unshare --map-auto --map-root-user --mount --pid --fork --mount-proc true 2>/dev/null; then
+            echo "The sudo bats tests run on this runner."
+          else
+            echo "::warning title=sudo bats tests::This runner cannot create the unprivileged user namespace the sudo bats tests need (tests/bash/sudo-sandbox.bash). They will FAIL in check.sh; they are not skipped."
+          fi
+
+      - name: check.sh
+        run: ./check.sh
