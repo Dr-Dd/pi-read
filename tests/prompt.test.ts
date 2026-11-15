@@ -34,8 +34,14 @@ test("without TMUX, with a display and SUDO_ASKPASS: askpass uses SUDO_ASKPASS",
 	const fake = fakeExecutable();
 	try {
 		const env = { DISPLAY: ":0", SUDO_ASKPASS: fake.path };
-		assert.deepEqual(choosePromptMethods(env, "print", which()), ["askpass"]);
-		assert.equal(findAskpass(env, which("ksshaskpass")), fake.path);
+		assert.deepEqual(
+			choosePromptMethods(env, "print", which(), (p) => p),
+			["askpass"],
+		);
+		assert.equal(
+			findAskpass(env, which("ksshaskpass"), (p) => p),
+			fake.path,
+		);
 	} finally {
 		fake.cleanup();
 	}

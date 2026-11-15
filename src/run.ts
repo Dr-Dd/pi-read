@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { trustedCommand } from "./trusted.ts";
 
 export interface RunResult {
 	code: number;
@@ -26,6 +27,11 @@ export function sudoArgs(prompt: string, command: string[], options: SudoOptions
 	return [...(options.remember ? [] : ["-k"]), ...(options.askpass ? ["-A"] : []), "-p", prompt, "--", ...command];
 }
 
+/** The result when no trusted program of that name exists: nothing ran. */
+function untrusted(name: string): RunResult {
+	return { code: 127, stdout: "", stderr: `no trusted ${name} found (root-owned, in a system directory)` };
+}
+
 /** What `pi-share --probe` prints. */
 export const PROBE_OUTPUT = "pi-share: probe\n";
 
@@ -35,8 +41,10 @@ export const PROBE_OUTPUT = "pi-share: probe\n";
  * a timeout) counts as not remembered, so sudo asks for the password as usual.
  */
 export async function sudoRemembers(piShare: string, options: { sudo?: string } = {}): Promise<boolean> {
+	const sudo = options.sudo ?? trustedCommand("sudo");
+	if (!sudo) return false;
 	const signal = AbortSignal.timeout(5000);
-	const result = await collect(options.sudo ?? "sudo", ["-n", "--", piShare, "--probe"], { signal });
+	const result = await collect(sudo, ["-n", "--", piShare, "--probe"], { signal });
 	return result.code === 0 && result.stdout === PROBE_OUTPUT;
 }
 
@@ -67,8 +75,10 @@ export function runAskpass(
 	command: string[],
 	options: { sudo?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
 ): Promise<RunResult> {
+	const sudo = options.sudo ?? trustedCommand("sudo");
+	if (!sudo) return Promise.resolve(untrusted("sudo"));
 	const env = { ...(options.env ?? process.env), SUDO_ASKPASS: askpass };
-	return collect(options.sudo ?? "sudo", sudoArgs(prompt, command, { askpass: true }), { env, signal: options.signal });
+	return collect(sudo, sudoArgs(prompt, command, { askpass: true }), { env, signal: options.signal });
 }
 
 /** What drainTerminalInput needs from pi's terminal input (process.stdin in pi). */
@@ -134,11 +144,13 @@ export function runOnTerminal(
 	command: string[],
 	options: { sudo?: string } = {},
 ): RunResult {
+	const sudo = options.sudo ?? trustedCommand("sudo");
+	if (!sudo) return untrusted("sudo");
 	const ignore = () => {};
 	process.on("SIGINT", ignore);
 	try {
 		process.stdout.write(`\n${description}\n\n`);
-		const result = spawnSync(options.sudo ?? "sudo", sudoArgs(prompt, command, { remember: true }), {
+		const result = spawnSync(sudo, sudoArgs(prompt, command, { remember: true }), {
 			stdio: ["inherit", "pipe", "pipe"],
 			encoding: "utf8",
 		});
@@ -163,31 +175,36 @@ function shQuote(s: string): string {
  * not as a missing popup. No abort signal: killing the tmux client would leave the popup asking
  * for a password whose result nobody reads, so an aborted call waits for the popup to close.
  * No popup title (-T): that needs tmux 3.3, popups only 3.2, and the description names pi-read.
+ * tmux, sh and sudo run by absolute path, and the script prints with the shell builtin printf, so
+ * the popup runs no program found by name. Without a trusted one of them the popup does not run.
  */
 export async function runTmuxPopup(
 	description: string,
 	prompt: string,
 	command: string[],
-	options: { sudo?: string; tmux?: string } = {},
+	options: { sudo?: string; tmux?: string; sh?: string } = {},
 ): Promise<RunResult | undefined> {
+	const sudo = options.sudo ?? trustedCommand("sudo");
+	const tmux = options.tmux ?? trustedCommand("tmux");
+	const sh = options.sh ?? trustedCommand("sh");
+	if (!sudo || !tmux || !sh) return undefined;
 	const dir = mkdtempSync(join(tmpdir(), "pi-read-")); // mode 0700
 	try {
 		const out = join(dir, "out");
 		const err = join(dir, "err");
 		const status = join(dir, "status");
-		writeFileSync(join(dir, "description"), `${description}\n\n`, { mode: 0o600 });
-		const sudoCmd = [options.sudo ?? "sudo", ...sudoArgs(prompt, command)].map(shQuote).join(" ");
+		const sudoCmd = [sudo, ...sudoArgs(prompt, command)].map(shQuote).join(" ");
 		const script = [
 			`echo 130 >${shQuote(status)}`,
 			`trap 'exit 130' INT TERM HUP`,
-			`cat ${shQuote(join(dir, "description"))}`,
+			`printf '%s\\n\\n' ${shQuote(description)}`,
 			`${sudoCmd} >${shQuote(out)} 2>${shQuote(err)}`,
 			`echo $? >${shQuote(status)}`,
 			"",
 		].join("\n");
 		const scriptPath = join(dir, "run.sh");
 		writeFileSync(scriptPath, script, { mode: 0o600 });
-		await collect(options.tmux ?? "tmux", ["display-popup", "-E", `sh ${shQuote(scriptPath)}`], {});
+		await collect(tmux, ["display-popup", "-E", `${shQuote(sh)} ${shQuote(scriptPath)}`], {});
 		let code: number;
 		try {
 			code = Number.parseInt(readFileSync(status, "utf8").trim(), 10);

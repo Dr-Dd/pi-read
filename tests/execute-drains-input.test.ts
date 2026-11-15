@@ -5,7 +5,7 @@ import test from "node:test";
 import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import piRead from "../src/index.ts";
 import type { TerminalInput } from "../src/run.ts";
-import { captureStdout, makeFakes, pathWith, withEnv } from "./helpers.ts";
+import { captureStdout, makeFakes, pathLookup, pathWith, withEnv } from "./helpers.ts";
 
 interface ToolResult {
 	content: { type: string; text: string }[];
@@ -32,7 +32,7 @@ function loadTool(terminalInput: TerminalInput): RuntimeTool {
 			},
 			on: () => {},
 		} as unknown as ExtensionAPI,
-		{ helperProblem: () => undefined, terminalInput },
+		{ helperProblem: () => undefined, terminalInput, lookup: pathLookup },
 	);
 	assert.ok(registered);
 	return registered as unknown as RuntimeTool;

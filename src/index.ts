@@ -8,7 +8,7 @@ import { Type } from "typebox";
 import { PI_SHARE_PATH } from "./config.ts";
 import { confirmComponent } from "./confirm.ts";
 import { forAgent, forUser, type InstallProblem, installProblem } from "./helper.ts";
-import { choosePromptMethods, findAskpass, type PromptMethod, pathWhich } from "./prompt.ts";
+import { choosePromptMethods, findAskpass, type PromptMethod } from "./prompt.ts";
 import {
 	describeListRequest,
 	describeRequest,
@@ -39,6 +39,7 @@ import {
 	sudoRemembers,
 	type TerminalInput,
 } from "./run.ts";
+import { type Lookup, SYSTEM_DIRS, systemLookup } from "./trusted.ts";
 
 interface Details {
 	method?: PromptMethod;
@@ -102,12 +103,18 @@ const REFUSED = "refused";
  * On pi's terminal, when sudo still remembers the password, it would approve without asking: pi
  * asks yes/no first instead. Esc, or No, refuses.
  */
-async function confirmIfRemembered(description: string, ctx: ExtensionToolContext): Promise<boolean> {
-	if (!(await sudoRemembers(PI_SHARE_PATH))) return true;
+async function confirmIfRemembered(description: string, sudo: string, ctx: ExtensionToolContext): Promise<boolean> {
+	if (!(await sudoRemembers(PI_SHARE_PATH, { sudo }))) return true;
 	return ctx.ui.custom<boolean>(
 		(tui, theme, _kb, done) => confirmComponent(description, theme, done, () => tui.requestRender()),
 		{ blocked: { kind: "permission", message: "pi-read: approve the request?" } },
 	);
+}
+
+/** The programs a request runs, all by trusted absolute path. */
+interface Programs {
+	sudo: string;
+	lookup: Lookup;
 }
 
 async function runWith(
@@ -117,13 +124,15 @@ async function runWith(
 	ctx: ExtensionToolContext,
 	signal: AbortSignal | undefined,
 	input: TerminalInput,
+	programs: Programs,
 ): Promise<RunResult | typeof REFUSED | undefined> {
+	const { sudo, lookup } = programs;
 	// The terminal and the popup print the request once, then sudo asks only the question (also on
 	// a retry after a wrong password). The askpass dialog has to carry the request in its prompt.
 	const { description } = approval;
 	switch (method) {
 		case "tui":
-			if (!(await confirmIfRemembered(description, ctx))) return REFUSED;
+			if (!(await confirmIfRemembered(description, sudo, ctx))) return REFUSED;
 			return ctx.ui.custom<RunResult>((tui, _theme, _kb, done) => {
 				tui.stop();
 				// Drain input still on its way (mouse-wheel reports, key releases) before sudo reads the
@@ -131,7 +140,7 @@ async function runWith(
 				const run = async (): Promise<RunResult> => {
 					try {
 						await drainTerminalInput(input);
-						return runOnTerminal(description, PASSWORD_QUESTION, command);
+						return runOnTerminal(description, PASSWORD_QUESTION, command, { sudo });
 					} catch (err) {
 						return { code: 1, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
 					}
@@ -146,14 +155,22 @@ async function runWith(
 				});
 				return { render: () => [], invalidate: () => {} };
 			});
-		case "tmux":
-			return runTmuxPopup(description, PASSWORD_QUESTION, command);
+		case "tmux": {
+			const tmux = lookup.command("tmux");
+			const sh = lookup.command("sh");
+			if (!tmux || !sh) return undefined;
+			return runTmuxPopup(description, PASSWORD_QUESTION, command, { sudo, tmux, sh });
+		}
 		case "askpass": {
-			const askpass = findAskpass(process.env, pathWhich(process.env));
-			return askpass ? runAskpass(askpass, approval.askpassPrompt, command, { signal }) : undefined;
+			const askpass = findAskpass(process.env, lookup.command, lookup.file);
+			return askpass ? runAskpass(askpass, approval.askpassPrompt, command, { sudo, signal }) : undefined;
 		}
 	}
 }
+
+const NO_PROMPT =
+	"No password prompt was available: pi has no terminal, is not inside tmux, and no graphical askpass was found. " +
+	"Ask the user to provide the files another way.";
 
 /**
  * Run sudo pi-share with the first prompt method that works and turn its output into the tool
@@ -168,10 +185,22 @@ async function share(
 	ctx: ExtensionToolContext,
 	signal: AbortSignal | undefined,
 	input: TerminalInput,
+	lookup: Lookup,
 ) {
-	const methods = choosePromptMethods(process.env, ctx.mode, pathWhich(process.env));
+	const methods = choosePromptMethods(process.env, ctx.mode, lookup.command, lookup.file);
+	if (methods.length === 0) {
+		return fail(NO_PROMPT);
+	}
+	const sudo = lookup.command("sudo");
+	if (!sudo) {
+		return fail(
+			"No trusted sudo was found: pi-read runs only a root-owned sudo, not writable by group or others, " +
+				`from ${SYSTEM_DIRS.slice(0, -1).join(", ")} or ${SYSTEM_DIRS.at(-1)}. ` +
+				"Ask the user to provide the files another way.",
+		);
+	}
 	for (const method of methods) {
-		const result = await runWith(method, approval, command, ctx, signal, input);
+		const result = await runWith(method, approval, command, ctx, signal, input, { sudo, lookup });
 		if (!result) continue;
 		if (result === REFUSED) return fail(`The request was refused (${method} confirmation).`, { method });
 		if (result.code !== 0) {
@@ -192,10 +221,7 @@ async function share(
 			details: { method, shared: output.files, expires: expires.toISOString() },
 		};
 	}
-	return fail(
-		"No password prompt was available: pi has no terminal, is not inside tmux, and no graphical askpass was found. " +
-			"Ask the user to provide the files another way.",
-	);
+	return fail(NO_PROMPT);
 }
 
 export interface PiReadOptions {
@@ -206,6 +232,8 @@ export interface PiReadOptions {
 	helperProblem?: () => InstallProblem | undefined;
 	/** pi's terminal input, drained before sudo asks on it. Tests replace it. */
 	terminalInput?: TerminalInput;
+	/** How sudo, tmux, sh and the askpass are found: trusted system paths only. Tests replace it. */
+	lookup?: Lookup;
 }
 
 /** session_start reasons that warn: pi starting, and /reload (when a fresh pi update takes effect). */
@@ -214,6 +242,7 @@ const WARN_REASONS = new Set(["startup", "reload"]);
 export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): void {
 	const checkHelper = options.helperProblem ?? (() => installProblem());
 	const input = options.terminalInput ?? process.stdin;
+	const lookup = options.lookup ?? systemLookup;
 	// Tell the user when install.sh has to run, before the agent's first request fails. Only tells:
 	// running install.sh needs the user's sudo password.
 	pi.on("session_start", (event, ctx) => {
@@ -246,7 +275,7 @@ export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): v
 			if (problem) return fail(`request_root_list: ${forAgent(problem)}`);
 			const approval = { description: describeListRequest(req), askpassPrompt: listPrompt(req) };
 			const command = [PI_SHARE_PATH, ...listArgs(req, process.pid)];
-			return share("request_root_list", approval, command, req.duration, formatListResult, ctx, signal, input);
+			return share("request_root_list", approval, command, req.duration, formatListResult, ctx, signal, input, lookup);
 		},
 	});
 	pi.registerTool({
@@ -275,7 +304,7 @@ export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): v
 			if (problem) return fail(`request_root_read: ${forAgent(problem)}`);
 			const approval = { description: describeRequest(req), askpassPrompt: sudoPrompt(req) };
 			const command = [PI_SHARE_PATH, ...shareArgs(req, process.pid)];
-			return share("request_root_read", approval, command, req.duration, formatResult, ctx, signal, input);
+			return share("request_root_read", approval, command, req.duration, formatResult, ctx, signal, input, lookup);
 		},
 	});
 }

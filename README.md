@@ -201,6 +201,11 @@ and pi. gitleaks has to be root-owned and not writable by your user (a distribut
 `install.sh` refuses to install without it, and `pi-share` refuses one it cannot trust. Optional: tmux
 3.2 or newer for popups, an askpass program for graphical prompts.
 
+pi-read runs sudo, tmux, `sh` and the askpass only from the system directories (`/usr/local/sbin`,
+`/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin`, `/bin`), never from your `PATH`, and only when they
+are root-owned and not writable by group or others, like every folder and link on the way to them.
+A `$SUDO_ASKPASS` that fails this rule is ignored, and the known askpass programs are looked for instead.
+
 ## Development
 
 Requirements: Node.js 22.19 or newer, plus `shellcheck` and `shfmt` from your system's package manager. Everything else is pinned in `package-lock.json`:
@@ -222,7 +227,8 @@ the git source, not next to it), then run `./install.sh` from the clone.
 - the agent reading the files on the never-share list, even if you approve them;
 - other users on the machine reading the copies;
 - shares lasting longer than you allowed, or than the hard limit;
-- tricks such as a link in your home folder with a harmless name pointing at another file, or a program planted on your `PATH` to run as root.
+- tricks such as a link in your home folder with a harmless name pointing at another file, or a program planted on your `PATH` to run as root;
+- a fake sudo or askpass planted on your `PATH` (or set as `$SUDO_ASKPASS`) to capture your password.
 
 **It does not stop:**
 
