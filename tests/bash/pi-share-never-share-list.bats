@@ -77,7 +77,9 @@ parse() {
 		/etc/ipsec.secrets /var/lib/samba/private /var/lib/sss /etc/libvirt/secrets \
 		/etc/wireguard /etc/NetworkManager/system-connections \
 		/run/NetworkManager/system-connections /etc/wpa_supplicant /var/lib/iwd \
-		/var/lib/bluetooth /var/lib/systemd/coredump /swapfile /var/lib/docker | sort)
+		/var/lib/bluetooth /var/lib/systemd/coredump /swapfile /var/lib/docker \
+		/var/backups/'*'shadow'*' /etc/pki/tls/private /var/lib/tailscale /etc/kubernetes \
+		/var/lib/kubelet /var/lib/containers | sort)
 	[ "$output" = "$expected" ]
 }
 
