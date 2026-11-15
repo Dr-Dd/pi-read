@@ -32,6 +32,38 @@ flags with `[REDACTED]` before the agent can read them: `password = p4ssw0rd` be
 `password = [REDACTED]`. If gitleaks is missing, cannot be trusted, or
 fails, nothing is shared and the agent is told why.
 
+gitleaks runs with a config built into `pi-share`: gitleaks' default rules, which catch
+token-shaped secrets (cloud and API keys with a known prefix, private keys, long random strings),
+plus rules for credentials written in config files, which the default rules miss on purpose (their
+generic rule wants a long, random-looking value). The first two rules and their filters come from
+[detect-secrets](https://github.com/Yelp/detect-secrets) (Apache-2.0), translated for gitleaks;
+the last two are pi-read's own:
+
+- a value assigned to a secret-sounding key, with `=`, `:`, `:=` or `=>`, or written
+  `secret "...";`: keys containing `password`, `passwd`, `pwd`, `secret`, `api_key`, `auth_key`,
+  `private_key`, `client_key`, `db_pass` and the like (`db_password`, `PGPASSWORD`,
+  `AWS_SECRET_ACCESS_KEY`), plus, added by pi-read, `passphrase`, and `pass` or `psk` alone or
+  after a prefix (`DB_PASS`, `SMTP_PASS`). Quoted keys (JSON, YAML, PHP arrays) count. A quoted
+  value is replaced up to its closing quote; an unquoted one up to the end of the line (or a
+  quote), a trailing comment included;
+- the password in a URL (`postgres://app:S3cret@db/app`), whole even when it holds a raw `:` or
+  `@`;
+- the value of `requirepass`, `masterauth` (Redis), `bindpw` and `rootpw` (OpenLDAP, nslcd);
+- the text of an XML element such as `<password>` or `<secret>`, with or without attributes.
+
+They skip `[REDACTED]` and `${VAR}`, and all but the XML rule skip `$VAR`. Values must be at least
+4 characters (3 for a URL password). The key rule also skips, as detect-secrets does, values with
+no letter (`********`, `12345678`), values that are calls or lookups (`get_secret()`,
+`os.environ["X"]`), placeholders (`{{ ... }}`, `<...>`) and keys holding `_id`; and, added by
+pi-read, yes/no-style values (`true`, `null`, also as JSON `null,`) and nsswitch lines
+(`passwd: files systemd`). Not caught: a credential under another key name (`token = ...` is left
+to gitleaks' default rules, which want a random-looking value), an all-digit password outside a
+URL, a bare password on a line with no key, and a URL password holding a raw `/`.
+
+The key rule also flags log lines where such a word is followed by `:` (`passwd: password updated
+successfully`); in a log the same line usually recurs, so such a file is refused rather than
+shared (see the redaction check below).
+
 - gitleaks must be root-owned and not writable by group or other, and `pi-share` looks for it on its
 own `PATH` (`/usr/local/bin`, then the system directories), never yours.
 - The scan runs over the copies under a number, not under their real path: gitleaks' default
@@ -45,9 +77,12 @@ own `PATH` (`/usr/local/bin`, then the system directories), never yours.
 - The redaction is checked before the copies are handed over: every secret gitleaks reported is
   searched for in its redacted copy, and gitleaks runs again over the redacted copies. If either
   check still finds something (a line number gitleaks got wrong, or the same secret elsewhere in the
-  file), nothing is shared.
-- Nothing you control can steer the scan: `GITLEAKS_CONFIG`, a `gitleaks.toml` and a `.gitleaksignore`
-  are ignored, and a `gitleaks:allow` comment inside a file does not opt that line out.
+  file), nothing is shared. So a password that also appears unflagged elsewhere in the same file
+  (`user = postgres` and `password = postgres`, or `admin` next to `administrator`) makes the
+  share fail rather than leave a copy of it.
+- Nothing you control can steer the scan: the rules are the ones built into `pi-share`;
+  `GITLEAKS_CONFIG`, a `gitleaks.toml` and a `.gitleaksignore` are ignored, and a `gitleaks:allow`
+  comment inside a file does not opt that line out.
 
 Detection is best effort. A secret no rule matches, one inside an archive, and one in a file gitleaks
 could not read all reach the copy: see [What it protects against](#what-it-protects-against-and-what-it-doesnt).
@@ -252,9 +287,10 @@ the git source, not next to it), then run `./install.sh` from the clone.
 - **A tampered pi.** pi and its extensions live in your home folder, so a program running as you could modify them. A tampered pi could show you one request and send another, or capture your password while sudo is asking on its terminal. Your sudo password unlocks everything, not only `pi-share`.
 - **The agent copying what it reads** somewhere else, for example into your home folder.
 - **Your model provider seeing the files.** Anything the agent reads goes into the conversation. This is why the never-share list exists. Only approve what you would be happy to send.
-- **Secrets gitleaks does not recognise.** The filter is only as good as gitleaks' rules. A secret no
-  rule matches, one inside an archive, or one in a file gitleaks skipped (it warns instead of failing
-  when it cannot read a file) still reaches the copy.
+- **Secrets gitleaks does not recognise.** The filter is only as good as its rules (see
+  [Filtering](#filtering)). A secret no rule matches (a password under a key name the rules do not
+  know, or on a line with no key at all), one inside an archive, or one in a file gitleaks skipped
+  (it warns instead of failing when it cannot read a file) still reaches the copy.
 - **Secrets missing from the list.** The list blocks known secrets; you still approve every file.
 - **Yes instead of a password.** If you turn on the remembered password, answering Yes is enough
   to approve a request while sudo remembers it: read it before you answer. A process pi starts in
@@ -279,3 +315,8 @@ The kernel then enforces that only that pi session can read shares. Two limits r
 ## License
 
 [WTFPL](LICENSE): do what you want with it.
+
+The gitleaks rules in `bin/pi-share` translated from
+[detect-secrets](https://github.com/Yelp/detect-secrets) stay under its licence,
+[Apache-2.0](LICENSES/Apache-2.0.txt) (and, for the part detect-secrets took from Bandit, the MIT
+notice reproduced in `bin/pi-share`).

@@ -41,6 +41,126 @@ readonly NEVER_SHARE_LIST=/usr/local/etc/pi-read/never-share.list
 # of them can break the row.
 readonly REPORT_TEMPLATE=$'{{ range . }}{{ .File }}\t{{ .StartLine }}\t{{ .EndLine }}\t{{ len .Tags }}\t{{ .Secret | b64enc }}\t{{ .Match | b64enc }}\n{{ end }}'
 
+# The gitleaks config every scan runs with (see run_gitleaks): gitleaks' default rules, which catch
+# token-shaped secrets, plus rules for credentials written in config files, which they miss
+# (password = p4ssw0rd, requirepass ..., a password in a URL). Every added rule reports the value
+# alone as the secret, so only the value is redacted, and each allowlists [REDACTED] so a redacted
+# line passes the re-scan. Kept in pi-share itself, so it is root-owned and updated with it.
+#
+# The keyword and URL rules and their filters are translated to RE2 from Yelp detect-secrets,
+# https://github.com/Yelp/detect-secrets, commit 5e141933554a: detect_secrets/plugins/keyword.py
+# (KeywordDetector), detect_secrets/plugins/basic_auth.py (BasicAuthDetector) and
+# detect_secrets/filters/heuristic.py. pi-read modified them: every change and addition is marked
+# in the config. The directive and XML rules are pi-read's own. Unlike the rest of pi-read (WTFPL),
+# the translated parts stay under their licences (the Apache License text is in
+# LICENSES/Apache-2.0.txt in the pi-read repository):
+#
+#   Copyright 2017-2018 Yelp Inc. Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License. You may obtain a copy of the
+#   License at http://www.apache.org/licenses/LICENSE-2.0. Unless required by applicable law or
+#   agreed to in writing, software distributed under the License is distributed on an "AS IS"
+#   BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#   License for the specific language governing permissions and limitations under the License.
+#
+#   keyword.py was in turn extracted in part from PyCQA Bandit (https://github.com/PyCQA/bandit):
+#   Copyright (c) 2014 Hewlett-Packard Development Company, L.P.
+#   Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+#   and associated documentation files (the "Software"), to deal in the Software without
+#   restriction, including without limitation the rights to use, copy, modify, merge, publish,
+#   distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+#   Software is furnished to do so, subject to the following conditions: The above copyright
+#   notice and this permission notice shall be included in all copies or substantial portions of
+#   the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+#   PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+#   LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+#   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+#   IN THE SOFTWARE.
+IFS= read -r -d '' GITLEAKS_CONFIG_TOML <<'EOF' || true
+# pi-read: gitleaks' default rules, plus rules for credentials written in config files.
+[extend]
+useDefault = true
+
+# After detect-secrets' KeywordDetector, config-file variant (FOLLOWED_BY_COLON,
+# FOLLOWED_BY_EQUAL_SIGNS, FOLLOWED_BY_QUOTES_AND_SEMICOLON, plus its := and => forms). Keys: its
+# DENYLIST with any prefix and suffix. pi-read adds passphrase, and pass or psk alone or after a
+# _ - . prefix (DB_PASS, SMTP_PASS). The value is detect-secrets' SECRET: a word character first,
+# no quotes or line breaks, not ending in , quote or backtick. pi-read changes: quotes are " or '
+# only (no backtick), a value may not end in a space or tab, => also takes an unquoted value as =
+# does, in the "...;" form whatever follows the key starts with a non-word character (so pass and
+# psk stay whole words there too), and \w is ASCII only (RE2), so a key or value starting with a
+# non-ASCII letter is not matched.
+[[rules]]
+id = "pi-read-keyword-assignment"
+description = "Value assigned to a secret-sounding key (after detect-secrets' KeywordDetector)"
+regex = '''(?i)(?:^|[^\w.-])(?:[\w.-]*(?:api_?key|auth_?key|service_?key|account_?key|db_?key|database_?key|priv_?key|private_?key|client_?key|db_?pass|database_?pass|key_?pass|password|passwd|pwd|secret|contraseña|contrasena|passphrase)\w*|(?:[\w.-]*[_.-])?(?:pass|psk))(?:(?:[\]'"]{0,2}(?:[ \t]*(?:={1,3}|!==?|:=|=>)[ \t]*|:[ \t]*))(?:"(\w(?:[^\r\n'"]*[^\s,'"`])?)"|'(\w(?:[^\r\n'"]*[^\s,'"`])?)'|(\w(?:[^\r\n'"]*[^\s,'"`])?))|(?:[^\w\s]\S{0,49}?)?[ \t]*(?:"(\w(?:[^\r\n'"]*[^\s,'"`])?)"|'(\w(?:[^\r\n'"]*[^\s,'"`])?)');)'''
+keywords = ["key", "pass", "pwd", "secret", "contrase", "psk"]
+
+# detect-secrets' heuristics: no letter (is_not_alphanumeric_string), an indirect reference
+# (is_indirect_reference). pi-read's: under 4 characters, yes/no-style values (also with a
+# trailing , or ;), nsswitch source lists, [REDACTED].
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = [
+  '''^[^A-Za-z]*$''',
+  '''^.{1,3}$''',
+  '''(?i)^(?:true|false|yes|no|on|off|none|null|nil|required|optional)[,;]?$''',
+  '''^(?:(?:files|compat|systemd|sss|ldap|nis|nisplus|db|dns|winbind|mymachines|altfiles|cache|extrausers|usrfiles|\[[^\]\r\n]*\])[ \t]*)+(?:#.*)?$''',
+  '''^\[REDACTED\]$''',
+]
+
+# detect-secrets' heuristic is_likely_id_string: _id or _ids followed by a non-alphanumeric. pi-read
+# looks only at the key and its assignment (upstream: the line up to the secret, which also skips
+# lines starting with id, myid or userid).
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''(?i)^[^\w.-]?[\w.-]*_ids?[^a-z0-9]''']
+
+# detect-secrets' heuristic is_indirect_reference, on the whole line as there: the value is a call
+# or a lookup (get_secret(), os.environ["X"]). pi-read adds => to its operators, and applies it to
+# lines of any length (upstream skips this filter on lines over 1000 characters).
+[[rules.allowlists]]
+regexTarget = "line"
+regexes = ['''[^\r\n=!:]*[ \t]*(?::=?|=>|[!=]{1,3})[ \t]*[\w.-]+[\[(][^\r\n]*[\])]''']
+
+# After detect-secrets' BasicAuthDetector. pi-read changes: a scheme is required, the user may be
+# empty (redis://:pw@host), user and password are limited to RFC 3986 userinfo characters
+# (unreserved, %, sub-delims), the password is at least 3 characters, and it may hold : and @ and
+# runs to the last @, so a raw @ in it is redacted whole.
+[[rules]]
+id = "pi-read-url-password"
+description = "Password in the userinfo of a URL (after detect-secrets' BasicAuthDetector)"
+regex = '''(?i)[a-z][a-z0-9+.-]*://[a-z0-9._~%!$&'()*+,;=-]*:([a-z0-9._~%!$&'()*+,;=:@-]{3,})@'''
+keywords = ["://"]
+
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''^\[REDACTED\]$''', '''^\$[A-Za-z_]\w*$''', '''^\$\{[^}\s]+\}$''']
+
+# pi-read's own: a password given to a directive without = (Redis, OpenLDAP, nslcd).
+[[rules]]
+id = "pi-read-config-directive"
+description = "Password given to a config directive without = (Redis, OpenLDAP, nslcd)"
+regex = '''(?im)^[ \t]*(?:requirepass|masterauth|bindpw|rootpw)[ \t]+(?:"([^"\r\n]{4,})"|'([^'\r\n]{4,})'|([^\s"'][^\r\n]{2,}\S))'''
+keywords = ["requirepass", "masterauth", "bindpw", "rootpw"]
+
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''^\[REDACTED\]$''', '''^\$[A-Za-z_]\w*$''', '''^\$\{[^}\s]+\}$''']
+
+# pi-read's own: the text of an XML element named for a password or secret.
+[[rules]]
+id = "pi-read-xml-password"
+description = "Password or secret in an XML element"
+regex = '''(?i)<[\w.:-]*(?:password|passwd|passphrase|secret)(?:[ \t][^<>\r\n]*)?>[ \t]*([^<\s][^<\r\n]{2,}[^<\s])[ \t]*</'''
+keywords = ["pass", "secret"]
+
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''^\[REDACTED\]$''', '''^\$\{[^}\s]+\}$''']
+EOF
+readonly GITLEAKS_CONFIG_TOML
+
 # Virtual trees that are never shared, whatever the list says (they hold no files to copy).
 readonly BUILTIN_DENIED=(/proc /sys /dev)
 
@@ -873,17 +993,24 @@ partial_sed() {
 
 # run_gitleaks BASE SCAN GITLEAKS: run GITLEAKS over the staged copies in SCAN with the report
 # template in BASE; print its report, write its stderr to BASE/stderr and return its exit status.
-# env -i: GITLEAKS_CONFIG* from the caller must not choose the rules. --exit-code 3 keeps
+# The rules are GITLEAKS_CONFIG_TOML, written to BASE/gitleaks.toml (outside SCAN, so it is not
+# scanned) on every call; a config that cannot be written returns 1 without running gitleaks.
+# env -i: GITLEAKS_CONFIG* from the caller must not choose the rules either. --exit-code 3 keeps
 # "found something" apart from the 1 gitleaks uses for a fatal error; --ignore-gitleaks-allow
 # stops a gitleaks:allow comment in a copied file from opting its line out. The ignore path does
 # not exist, so a .gitleaksignore in the caller's directory cannot suppress findings either.
 run_gitleaks() {
 	local base=$1 scan=$2 gitleaks=$3
+	if ! printf '%s' "${GITLEAKS_CONFIG_TOML}" 2>/dev/null >"${base}/gitleaks.toml"; then
+		echo "could not write the gitleaks config" >"${base}/stderr"
+		return 1
+	fi
 	env -i PATH="${PATH}" "${gitleaks}" dir \
 		--no-banner --no-color --log-level error \
 		--exit-code 3 \
 		--ignore-gitleaks-allow \
 		--gitleaks-ignore-path "${base}/.gitleaksignore" \
+		--config "${base}/gitleaks.toml" \
 		--report-format template \
 		--report-template "${base}/template" \
 		--report-path - \
@@ -961,9 +1088,9 @@ check_secrets_gone() {
 # safely on it), all or nothing. The copies are hard-linked into
 # DIR/.filter/scan under numbers: a copy keeps its source path, and gitleaks' global allowlist skips
 # paths such as node_modules/ or package-lock.json, so a path-bearing name would never be scanned.
-# The filter dir also holds the report template and gitleaks' log, so the scanned tree is nothing but
-# our numbered links. It is all removed before the handover; a failure returns 1 and main removes
-# the share dir.
+# The filter dir also holds the report template, the gitleaks config and gitleaks' log, so the
+# scanned tree is nothing but our numbered links. It is all removed before the handover; a failure
+# returns 1 and main removes the share dir.
 filter_files() {
 	local dir=$1 gitleaks=$2 base scan i path other
 	shift 2
