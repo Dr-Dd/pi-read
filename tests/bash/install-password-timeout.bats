@@ -27,8 +27,8 @@ rule_of() {
 	bash -c 'source "$1" && sudoers_rule "${@:2}"' _ "$INSTALL" "$@" | grep -v '^#'
 }
 
-@test "sudoers_rule defaults to 30 seconds per process in its own directory and passes visudo" {
-	[ "$(rule_of)" = "Defaults!/usr/local/bin/pi-share timestamp_timeout=0.5, timestamp_type=ppid, timestampdir=/run/sudo/pi-read" ]
+@test "sudoers_rule defaults to 0 (ask every time) per process in its own directory and passes visudo" {
+	[ "$(rule_of)" = "Defaults!/usr/local/bin/pi-share timestamp_timeout=0, timestamp_type=ppid, timestampdir=/run/sudo/pi-read" ]
 	command -v visudo >/dev/null || skip "visudo not installed"
 	bash -c 'source "$1" && sudoers_rule' _ "$INSTALL" >"$BATS_TEST_TMPDIR/checked"
 	run visudo -cf "$BATS_TEST_TMPDIR/checked"
@@ -42,7 +42,7 @@ rule_of() {
 	[[ $(rule_of 3600) == *" timestamp_timeout=60, "* ]]
 }
 
-@test "install --password-timeout 2m installs and reports 120 seconds; a plain install reports 30" {
+@test "install --password-timeout 2m installs and reports 120 seconds; a plain install asks every time" {
 	run_install --password-timeout 2m
 	[ "$status" -eq 0 ]
 	[[ $output == *"sudo remembers your password for pi-share for 120 seconds."* ]]
@@ -52,8 +52,8 @@ rule_of() {
 	: >"$LOG"
 	run_install
 	[ "$status" -eq 0 ]
-	[[ $output == *"sudo remembers your password for pi-share for 30 seconds."* ]]
-	grep -q ' timestamp_timeout=0.5, ' "$BATS_TEST_TMPDIR/rule"
+	[[ $output == *"sudo asks for your password for pi-share every time."* ]]
+	grep -q ' timestamp_timeout=0, ' "$BATS_TEST_TMPDIR/rule"
 
 	run_install --password-timeout 0
 	[ "$status" -eq 0 ]
