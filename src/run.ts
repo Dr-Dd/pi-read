@@ -47,11 +47,61 @@ export function runAskpass(
 	return collect(options.sudo ?? "sudo", sudoArgs(prompt, command, true), { env, signal: options.signal });
 }
 
+/** What drainTerminalInput needs from pi's terminal input (process.stdin in pi). */
+export interface TerminalInput {
+	isTTY?: boolean;
+	isRaw?: boolean;
+	setRawMode?(mode: boolean): unknown;
+	on(event: "data", listener: (chunk: unknown) => void): unknown;
+	off(event: "data", listener: (chunk: unknown) => void): unknown;
+	resume(): unknown;
+	pause(): unknown;
+}
+
 /**
- * pi's own terminal. Call with pi's TUI stopped. stdin is the terminal (sudo asks on /dev/tty);
- * stdout and stderr are captured. SIGINT from Ctrl+C reaches pi too, so it is ignored meanwhile.
- * No abort signal: spawnSync blocks the event loop, so pi cannot react to one while sudo asks.
- * That costs nothing here: the user is at the prompt, and the command ends when they answer.
+ * Throw away input still on its way to pi's terminal, so sudo's password read does not start with it.
+ * After pi's TUI stops, the terminal is back in cooked mode with echo on: mouse-wheel reports sent
+ * before the terminal turned mouse reporting off, or late Kitty key releases, would be echoed as
+ * escape codes and stay in the line buffer, and sudo does not flush it. Raw mode hides them and makes
+ * a pending partial line readable. Returns once no byte arrived for idleMs, or after maxMs anyway,
+ * with the listener removed, the stream paused and the earlier raw mode restored.
+ */
+export async function drainTerminalInput(
+	input: TerminalInput,
+	options: { idleMs?: number; maxMs?: number } = {},
+): Promise<void> {
+	if (!input.isTTY || typeof input.setRawMode !== "function") return;
+	const idleMs = options.idleMs ?? 100;
+	const maxMs = options.maxMs ?? 1000;
+	const wasRaw = input.isRaw === true;
+	let lastData = Date.now();
+	const discard = () => {
+		lastData = Date.now();
+	};
+	input.setRawMode(true);
+	try {
+		input.on("data", discard);
+		input.resume();
+		const end = Date.now() + maxMs;
+		while (true) {
+			const now = Date.now();
+			if (now >= end || now - lastData >= idleMs) break;
+			const wait = Math.min(lastData + idleMs, end) - now;
+			await new Promise((resolve) => setTimeout(resolve, wait));
+		}
+	} finally {
+		input.off("data", discard);
+		input.pause();
+		input.setRawMode(wasRaw);
+	}
+}
+
+/**
+ * pi's own terminal. Call with pi's TUI stopped and its input drained. stdin is the terminal (sudo
+ * asks on /dev/tty); stdout and stderr are captured. SIGINT from Ctrl+C reaches pi too, so it is
+ * ignored meanwhile. spawnSync blocks the event loop, so nothing in pi reads the terminal while sudo
+ * asks. No abort signal: pi cannot react to one while sudo asks. That costs nothing here: the user
+ * is at the prompt, and the command ends when they answer.
  */
 export function runOnTerminal(
 	description: string,
@@ -63,7 +113,6 @@ export function runOnTerminal(
 	process.on("SIGINT", ignore);
 	try {
 		process.stdout.write(`\n${description}\n\n`);
-		// spawnSync, not spawn: the ctx.ui.custom callback around this call cannot await.
 		const result = spawnSync(options.sudo ?? "sudo", sudoArgs(prompt, command), {
 			stdio: ["inherit", "pipe", "pipe"],
 			encoding: "utf8",

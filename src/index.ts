@@ -29,7 +29,14 @@ import {
 	shareArgs,
 	sudoPrompt,
 } from "./request.ts";
-import { type RunResult, runAskpass, runOnTerminal, runTmuxPopup } from "./run.ts";
+import {
+	drainTerminalInput,
+	type RunResult,
+	runAskpass,
+	runOnTerminal,
+	runTmuxPopup,
+	type TerminalInput,
+} from "./run.ts";
 
 interface Details {
 	method?: PromptMethod;
@@ -92,6 +99,7 @@ async function runWith(
 	command: string[],
 	ctx: ExtensionToolContext,
 	signal: AbortSignal | undefined,
+	input: TerminalInput,
 ): Promise<RunResult | undefined> {
 	// The terminal and the popup print the request once, then sudo asks only the question (also on
 	// a retry after a wrong password). The askpass dialog has to carry the request in its prompt.
@@ -100,14 +108,24 @@ async function runWith(
 		case "tui":
 			return ctx.ui.custom<RunResult>((tui, _theme, _kb, done) => {
 				tui.stop();
-				let result: RunResult;
-				try {
-					result = runOnTerminal(description, PASSWORD_QUESTION, command);
-				} finally {
-					tui.start();
-					tui.requestRender(true);
-				}
-				done(result);
+				// Drain input still on its way (mouse-wheel reports, key releases) before sudo reads the
+				// password, then start the TUI again whatever happened, and only then report.
+				const run = async (): Promise<RunResult> => {
+					try {
+						await drainTerminalInput(input);
+						return runOnTerminal(description, PASSWORD_QUESTION, command);
+					} catch (err) {
+						return { code: 1, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
+					}
+				};
+				void run().then((result) => {
+					try {
+						tui.start();
+						tui.requestRender(true);
+					} finally {
+						done(result);
+					}
+				});
 				return { render: () => [], invalidate: () => {} };
 			});
 		case "tmux":
@@ -131,10 +149,11 @@ async function share(
 	format: (files: SharedFile[], expires: Date) => string,
 	ctx: ExtensionToolContext,
 	signal: AbortSignal | undefined,
+	input: TerminalInput,
 ) {
 	const methods = choosePromptMethods(process.env, ctx.mode, pathWhich(process.env));
 	for (const method of methods) {
-		const result = await runWith(method, approval, command, ctx, signal);
+		const result = await runWith(method, approval, command, ctx, signal, input);
 		if (!result) continue;
 		if (result.code !== 0) {
 			const why = result.stderr.trim() || `exit code ${result.code}`;
@@ -166,6 +185,8 @@ export interface PiReadOptions {
 	 * no real pi-share.
 	 */
 	helperProblem?: () => InstallProblem | undefined;
+	/** pi's terminal input, drained before sudo asks on it. Tests replace it. */
+	terminalInput?: TerminalInput;
 }
 
 /** session_start reasons that warn: pi starting, and /reload (when a fresh pi update takes effect). */
@@ -173,6 +194,7 @@ const WARN_REASONS = new Set(["startup", "reload"]);
 
 export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): void {
 	const checkHelper = options.helperProblem ?? (() => installProblem());
+	const input = options.terminalInput ?? process.stdin;
 	// Tell the user when install.sh has to run, before the agent's first request fails. Only tells:
 	// running install.sh needs the user's sudo password.
 	pi.on("session_start", (event, ctx) => {
@@ -205,7 +227,7 @@ export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): v
 			if (problem) return fail(`request_root_list: ${forAgent(problem)}`);
 			const approval = { description: describeListRequest(req), askpassPrompt: listPrompt(req) };
 			const command = [PI_SHARE_PATH, ...listArgs(req, process.pid)];
-			return share("request_root_list", approval, command, req.duration, formatListResult, ctx, signal);
+			return share("request_root_list", approval, command, req.duration, formatListResult, ctx, signal, input);
 		},
 	});
 	pi.registerTool({
@@ -234,7 +256,7 @@ export default function piRead(pi: ExtensionAPI, options: PiReadOptions = {}): v
 			if (problem) return fail(`request_root_read: ${forAgent(problem)}`);
 			const approval = { description: describeRequest(req), askpassPrompt: sudoPrompt(req) };
 			const command = [PI_SHARE_PATH, ...shareArgs(req, process.pid)];
-			return share("request_root_read", approval, command, req.duration, formatResult, ctx, signal);
+			return share("request_root_read", approval, command, req.duration, formatResult, ctx, signal, input);
 		},
 	});
 }
