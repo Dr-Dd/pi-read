@@ -12,7 +12,9 @@
 #   - mount -t tmpfs on /usr/local with a root-owned gitleaks stub at /usr/local/bin/gitleaks: it
 #     logs each call and the names in the directory it is given, prints /mnt/stub/gitleaks.out with
 #     "@SCAN@" replaced by that directory, prints /mnt/stub/gitleaks.err to stderr, and exits with
-#     /mnt/stub/gitleaks.rc, else 3 when it printed something and 0 when it did not;
+#     /mnt/stub/gitleaks.rc, else 3 when it printed something and 0 when it did not; a second call
+#     on the same directory (pi-share's re-scan) reads /mnt/stub/gitleaks.rescan.{out,err,rc}
+#     instead, and every call appends the content it scanned to /mnt/log/gitleaks-content;
 #   - bind-mounts placeholder stubs over /usr/bin/systemd-run and /usr/bin/systemctl;
 #   - installs pi-share root-owned 0755 at /mnt/bin/pi-share;
 #   - mounts a tmpfs on /usr/local/etc and installs the repo's never-share.defaults root-owned 0644
@@ -135,21 +137,34 @@ sandbox_setup() {
 
 	# PLACEHOLDER for gitleaks (the sandbox has none). It reports what the test described in
 	# /mnt/stub/gitleaks.out, so a test can put a finding on any line of a staged copy.
+	# The first call on a scan dir (one per share) reads gitleaks.{out,err,rc}; later calls on the
+	# same dir (the re-scan of the redacted copies) read gitleaks.rescan.{out,err,rc}. Each call
+	# logs the content it scanned to gitleaks-content.
 	cat >"${s}/stub/gitleaks" <<-'EOF'
 		#!/bin/sh
 		echo "$*" >>/mnt/log/gitleaks
 		for target in "$@"; do :; done
 		ls -1A -- "$target" 2>/dev/null >>/mnt/log/gitleaks-scan
-		if [ -s /mnt/stub/gitleaks.out ]; then
-			sed "s|@SCAN@|$target|g" /mnt/stub/gitleaks.out
+		calls=/mnt/log/gitleaks-calls-$(printf '%s' "$target" | tr '/' '_')
+		n=$(cat "$calls" 2>/dev/null || echo 0)
+		n=$((n + 1))
+		echo "$n" >"$calls"
+		echo "--- call $n" >>/mnt/log/gitleaks-content
+		for f in "$target"/*; do
+			[ -f "$f" ] && cat -- "$f" >>/mnt/log/gitleaks-content
+		done
+		stub=/mnt/stub/gitleaks
+		[ "$n" -gt 1 ] && stub=/mnt/stub/gitleaks.rescan
+		if [ -s "$stub.out" ]; then
+			sed "s|@SCAN@|$target|g" "$stub.out"
 		fi
-		if [ -s /mnt/stub/gitleaks.err ]; then
-			cat /mnt/stub/gitleaks.err >&2
+		if [ -s "$stub.err" ]; then
+			cat "$stub.err" >&2
 		fi
 		rc=0
-		if [ -f /mnt/stub/gitleaks.rc ]; then
-			rc=$(cat /mnt/stub/gitleaks.rc)
-		elif [ -s /mnt/stub/gitleaks.out ]; then
+		if [ -f "$stub.rc" ]; then
+			rc=$(cat "$stub.rc")
+		elif [ -s "$stub.out" ]; then
 			rc=3
 		fi
 		exit "$rc"

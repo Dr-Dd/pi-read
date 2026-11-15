@@ -42,6 +42,10 @@ own `PATH` (`/usr/local/bin`, then the system directories), never yours.
   replaced, every place it appears. When there is any doubt, the whole line is replaced instead: a
   secret spanning several lines (a private key), one gitleaks found by decoding (base64 and the
   like), or one that cannot be found on its line as reported.
+- The redaction is checked before the copies are handed over: every secret gitleaks reported is
+  searched for in its redacted copy, and gitleaks runs again over the redacted copies. If either
+  check still finds something (a line number gitleaks got wrong, or the same secret elsewhere in the
+  file), nothing is shared.
 - Nothing you control can steer the scan: `GITLEAKS_CONFIG`, a `gitleaks.toml` and a `.gitleaksignore`
   are ignored, and a `gitleaks:allow` comment inside a file does not opt that line out.
 
