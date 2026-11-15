@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import piRead from "../src/index.ts";
-import { captureStdout, makeFakes, pathWith, withEnv } from "./helpers.ts";
+import { captureStdout, makeFakes, pathLookup, pathWith, withEnv } from "./helpers.ts";
 
 interface ToolResult {
 	content: { type: string; text: string }[];
@@ -37,7 +37,7 @@ function loadTool(): RuntimeTool {
 			},
 			on: () => {},
 		} as unknown as ExtensionAPI,
-		{ helperProblem: () => undefined },
+		{ helperProblem: () => undefined, lookup: pathLookup },
 	);
 	assert.ok(registered, "the extension registered no tool");
 	return registered as unknown as RuntimeTool;

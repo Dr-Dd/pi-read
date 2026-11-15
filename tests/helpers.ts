@@ -1,8 +1,9 @@
 /** Helpers for the runtime-path tests: fake commands in a private directory, env swaps, stdout capture. */
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import type { Lookup } from "../src/trusted.ts";
 
 export interface Fakes {
 	/** The temporary directory the fake commands live in. */
@@ -66,3 +67,28 @@ export async function captureStdout<T>(fn: () => Promise<T> | T): Promise<{ resu
 		process.stdout.write = original;
 	}
 }
+
+function isExecutable(path: string): boolean {
+	try {
+		accessSync(path, constants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * A lookup that finds commands on the current PATH and accepts any executable absolute file, so a
+ * test's fake sudo, tmux or askpass in a temporary directory is run. The extension never does this.
+ */
+export const pathLookup: Lookup = {
+	command(name) {
+		for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+			if (!dir) continue;
+			const candidate = join(dir, name);
+			if (isExecutable(candidate)) return candidate;
+		}
+		return undefined;
+	},
+	file: (path) => (path.startsWith("/") && isExecutable(path) ? path : undefined),
+};
