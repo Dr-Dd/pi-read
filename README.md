@@ -148,6 +148,8 @@ sudo diff -u ~/.pi/agent/git/github.com/Dr-Dd/pi-read/never-share.defaults /usr/
 
 `pi-share` refuses every request when the list is missing, has no entries, has an entry that is not an absolute path or holds a control character, is a link, is not owned by root, or is writable by you (directly or through a folder above it).
 
+To catch hard links to never-share files, `pi-share` walks the list's entries: for a file request only when a requested file has more than one link or sits on a filesystem that is mounted more than once or bind-mounted (then a never-share file could be the same file under another name), and always for a listing. A walk that fails, or takes longer than 30 seconds for one entry, refuses the request. Files that disappear while it walks (common under `/var/lib/docker`) do not.
+
 Whatever the list says, `pi-share` also refuses `/proc`, `/sys` and `/dev`, swap devices, anywhere your own user can write (such as `/home` and `/tmp`), and links that lead to any of the above.
 
 Links are refused altogether, as is any path that is not written out in full (`/etc/../etc/fstab`): you approve the path you are shown, so it has to be the file that gets copied. `pi-share` names the real path in its refusal, and the agent can ask for that instead.

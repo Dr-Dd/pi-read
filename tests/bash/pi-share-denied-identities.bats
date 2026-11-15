@@ -88,6 +88,7 @@ in_script() {
 		source /mnt/bin/pi-share
 		make_file /mnt/data/a "A" 0600
 		make_file /mnt/data/b "B" 0600
+		ln /mnt/data/a /mnt/data/a-link
 		calls=/mnt/log/denied-calls
 		: >"$calls"
 		denied_identities() {
