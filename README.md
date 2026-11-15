@@ -96,8 +96,8 @@ left selects Yes, right selects No, enter confirms, and esc refuses. No refuses 
   (`timestamp_type=ppid`).
 - The tmux popup and the graphical askpass always ask for the password: pi cannot ask Yes or No there.
 - Change the time with `install.sh --password-timeout DURATION` (`45s`, `2m`, up to `1h`; `0` asks
-  for the password every time). install.sh does not remember it: pass it again every time you run
-  install.sh, or it goes back to 30 seconds.
+  for the password every time). Later runs of install.sh without the option keep the time
+  already installed; a first install uses 30 seconds.
 
 ### Limits
 
@@ -179,8 +179,8 @@ missing and the full path of the `install.sh` to run. The warning only tells you
 
 Update the extension with `pi update --extensions` (or `pi update git:github.com/Dr-Dd/pi-read`), then
 run `~/.pi/agent/git/github.com/Dr-Dd/pi-read/install.sh` again. `pi-share` is a root-owned copy, so it stays
-at the old version until `install.sh` runs again, and so does the sudoers rule (pass
-`--password-timeout` again if you changed it). The extension notices the difference: pi warns you
+at the old version until `install.sh` runs again, and so does the sudoers rule (its password
+timeout is kept). The extension notices the difference: pi warns you
 when it starts or after `/reload`, naming the `install.sh` to run, and the extension refuses requests
 until then, telling the agent to ask you for this.
 
