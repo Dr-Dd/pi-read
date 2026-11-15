@@ -167,7 +167,31 @@ sandbox_setup() {
 		mount --bind "${s}/stub/empty" "${mask}"
 	done
 	install -o 0 -g 0 -m 0755 -- "${s}/stub/gitleaks" /usr/local/bin/gitleaks
+	mask_unreadable_walk_dirs "${defaults}"
 	set +e
+}
+
+# mask_unreadable_walk_dirs LIST: the sandbox root cannot read the host's root-only directories
+# (/root, /var/lib/docker, ...), and pi-share refuses a request when its never-share walk cannot
+# see everything. Cover each such directory below the walk roots of LIST with an empty root-owned
+# 0700 tmpfs: it only hides what the sandbox could not read anyway.
+mask_unreadable_walk_dirs() {
+	local list=$1 entry root dir
+	local -a roots=()
+	while IFS= read -r entry; do
+		[[ -z ${entry} || ${entry} == '#'* ]] && continue
+		root=${entry}
+		if [[ ${entry} == *[*?[]* ]]; then
+			root=${entry%%[*?[]*}
+			root=${root%/*}
+			root=${root:-/}
+		fi
+		[[ -d ${root} ]] && roots+=("${root}")
+	done <"${list}"
+	((${#roots[@]} > 0)) || return 0
+	while IFS= read -r -d '' dir; do
+		mount -t tmpfs -o mode=0700 tmpfs "${dir}"
+	done < <(find -H "${roots[@]}" -xdev -type d \( ! -readable -o ! -executable \) -prune -print0 2>/dev/null || true)
 }
 
 sandbox_eval() {

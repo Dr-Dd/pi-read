@@ -28,6 +28,8 @@ readonly MAX_BYTES=52428800
 readonly MAX_DEPTH=10
 readonly MAX_ENTRIES=5000
 readonly LIST_TIMEOUT=30
+# Longest find run (seconds) for each never-share entry walked for hard links and bind mounts.
+readonly DENIED_WALK_TIMEOUT=30
 
 # The never-share list: root-owned, edited in place by root (sudoedit). install.sh creates it from
 # never-share.defaults when none is installed. pi-share refuses everything when it cannot use it.
@@ -285,13 +287,48 @@ pattern_base() {
 	printf '%s\n' "${head:-/}"
 }
 
+# walk_status ROOT STATUS: succeed when the never-share walk of ROOT that ended with STATUS saw
+# everything; else say why and fail. A timeout always fails. Any other failure fails too, unless
+# ROOT itself is gone (it vanished during the walk, so there was nothing left to see).
+walk_status() {
+	local root=$1 status=$2
+	case ${status} in
+	0) return 0 ;;
+	124 | 137)
+		echo "pi-share: never-share walk of ${root} timed out after ${DENIED_WALK_TIMEOUT} s" >&2
+		return 1
+		;;
+	*) ;;
+	esac
+	if [[ ! -e ${root} && ! -L ${root} ]]; then
+		return 0
+	fi
+	echo "pi-share: never-share walk of ${root} failed (find exit ${status})" >&2
+	return 1
+}
+
+# match_pattern PATTERN: read NUL-separated "path, identity" pairs and print the identity of each
+# path that is, or is below, PATTERN (the rule of is_denied, so * crosses / here too).
+match_pattern() {
+	local pattern=$1 path identity
+	while IFS= read -r -d '' path && IFS= read -r -d '' identity; do
+		# shellcheck disable=SC2053 # entries are patterns on purpose
+		if [[ ${path} == ${pattern} || ${path} == ${pattern}/* ]]; then
+			printf '%s\n' "${identity}"
+		fi
+	done
+}
+
 # denied_identities [TYPE]: print "dev:inode" of the existing never-share files (TYPE f, the
 # default), to catch hard links, or of the never-share directories (TYPE d), to catch bind mounts.
 # A literal entry is walked as is. A pattern is walked from pattern_base and each file is matched
-# against it with the same rule as is_denied (so * crosses / here too). find -H follows an entry
-# that is itself a link, so the file it names is covered.
+# against it (match_pattern). find -H follows an entry that is itself a link, so the file it names
+# is covered. Fails closed: a walk that times out (DENIED_WALK_TIMEOUT per entry) or fails makes
+# the whole list untrustworthy, so it fails, naming the entry. An entry that does not exist is not
+# walked, and files vanishing mid-walk (-ignore_readdir_race) are not a failure.
 denied_identities() {
-	local type=${1:-f} name rest root path identity
+	local type=${1:-f} name rest root base status
+	local -a pipe
 	if [[ ${type} == f ]]; then
 		[[ -f /swapfile ]] && stat -L -c '%d:%i' -- /swapfile
 		while read -r name rest; do
@@ -300,17 +337,73 @@ denied_identities() {
 	fi
 	while IFS= read -r root; do
 		if [[ ${root} != *[*?[]* ]]; then
-			find -H "${root}" -xdev -type "${type}" -printf '%D:%i\n' 2>/dev/null || true
+			[[ -e ${root} || -L ${root} ]] || continue
+			status=0
+			timeout -k 5 "${DENIED_WALK_TIMEOUT}" find -H "${root}" -xdev -ignore_readdir_race \
+				-type "${type}" -printf '%D:%i\n' 2>/dev/null || status=$?
+			walk_status "${root}" "${status}" || return 1
 			continue
 		fi
-		while IFS= read -r -d '' path && IFS= read -r -d '' identity; do
-			# shellcheck disable=SC2053 # entries are patterns on purpose
-			if [[ ${path} == ${root} || ${path} == ${root}/* ]]; then
-				printf '%s\n' "${identity}"
+		base=$(pattern_base "${root}")
+		[[ -e ${base} || -L ${base} ]] || continue
+		if timeout -k 5 "${DENIED_WALK_TIMEOUT}" find -H "${base}" -xdev -ignore_readdir_race \
+			-type "${type}" -printf '%p\0%D:%i\0' 2>/dev/null | match_pattern "${root}"; then
+			status=0
+		else
+			pipe=("${PIPESTATUS[@]}")
+			status=${pipe[0]}
+			if [[ ${pipe[1]:-1} != 0 ]]; then
+				echo "pi-share: never-share walk of ${base} failed" >&2
+				return 1
 			fi
-		done < <(find -H "$(pattern_base "${root}")" -xdev -type "${type}" -printf '%p\0%D:%i\0' 2>/dev/null || true)
+		fi
+		walk_status "${base}" "${status}" || return 1
 	done < <(denied_scan_roots)
 	return 0
+}
+
+# needs_link_walk FILE...: succeed when any FILE may be a hard link (a link count other than 1, or
+# one that cannot be read), so denied_identities has something to catch.
+needs_link_walk() {
+	local file links
+	for file in "$@"; do
+		links=$(stat -c '%h' -- "${file}" 2>/dev/null) || return 0
+		[[ ${links} == 1 ]] || return 0
+	done
+	return 1
+}
+
+# on_shared_mount FILE: succeed when FILE's filesystem may also be reachable through another path
+# by a bind mount, so a never-share file could be FILE with a link count of 1: FILE's device is on
+# more than one line of /proc/self/mountinfo, on one line whose root is not / (a bind mount of a
+# file or a directory), or on none. Fails closed: anything that cannot be read succeeds.
+on_shared_mount() {
+	local device major root rest count=0
+	device=$(stat -c '%Hd:%Ld' -- "$1" 2>/dev/null) || return 0
+	[[ -n ${device} ]] || return 0
+	while read -r _ _ major root rest; do
+		[[ ${major} == "${device}" ]] || continue
+		count=$((count + 1))
+		[[ ${root} == / ]] || return 0
+	done </proc/self/mountinfo || return 0
+	((count != 1))
+}
+
+# check_not_linked DENIED FILE...: refuse the first FILE whose identity is in DENIED (the output of
+# denied_identities), or that cannot be examined.
+check_not_linked() {
+	local denied=$1 file identity
+	shift
+	for file in "$@"; do
+		identity=$(stat -c '%d:%i' -- "${file}") || {
+			echo "pi-share: cannot examine: ${file}" >&2
+			return 1
+		}
+		if is_denied_identity "${identity}" "${denied}"; then
+			echo "pi-share: refused (never shared, linked): ${file}" >&2
+			return 1
+		fi
+	done
 }
 
 # is_denied_identity IDENTITY DENIED: succeed when IDENTITY is one of the lines of DENIED
@@ -1068,29 +1161,49 @@ main() {
 	fi
 	gitleaks=$(require_gitleaks gitleaks) || exit 1
 
-	# Validate everything first. The never-share identities are collected once for all files:
-	# that is a find over /var/lib/docker and friends, too slow to repeat per file.
+	# Validate everything first. The never-share identities come from a find over /var/lib/docker
+	# and friends, too slow to repeat per file: they are collected once, and for files only when a
+	# requested file has a second link for them to catch (after the per-file checks, so the walk
+	# runs only for files that pass them). A walk that fails or times out refuses the request.
 	# A listing is written by pi-share itself, as <share dir>/listing-<i>: resolved_files then holds
 	# those names (relative to the share dir, like the copies), and dirs the directories to list.
-	local line total=0 size resolved_files=() requested=() dirs=() denied denied_dirs=""
-	denied=$(denied_identities)
+	local line total=0 size resolved_files=() requested=() dirs=() denied="" denied_dirs=""
 	if ((list == 1)); then
-		denied_dirs=$(denied_identities d)
+		denied_dirs=$(denied_identities d) ||
+			die "cannot check for never-share directories mounted elsewhere; nothing shared"
 		for file in "$@"; do
 			line=$(check_dir "${file}" "${uid}" "${gid}" "${denied_dirs}") || exit 1
 			dirs+=("${line}")
 			resolved_files+=("/listing-${#requested[@]}")
 			requested+=("${file}")
 		done
+		denied=$(denied_identities) ||
+			die "cannot check for hard links to never-share files; nothing shared"
 	else
 		for file in "$@"; do
-			line=$(check_file "${file}" "${uid}" "${gid}" "${denied}") || exit 1
+			line=$(check_file "${file}" "${uid}" "${gid}" "") || exit 1
 			resolved_files+=("${line%%$'\t'*}")
 			requested+=("${file}")
 			size=${line##*$'\t'}
 			total=$((total + size))
 		done
 		((total <= MAX_BYTES)) || die "files total ${total} bytes; the limit is ${MAX_BYTES} (50 MB)"
+		local walk=0
+		if needs_link_walk "${resolved_files[@]}"; then
+			walk=1
+		else
+			for file in "${resolved_files[@]}"; do
+				if on_shared_mount "${file}"; then
+					walk=1
+					break
+				fi
+			done
+		fi
+		if ((walk == 1)); then
+			denied=$(denied_identities) ||
+				die "cannot check for hard links to never-share files; nothing shared"
+			check_not_linked "${denied}" "${resolved_files[@]}" || exit 1
+		fi
 	fi
 
 	# Create the share dir, then the cleanup unit, then copy.
