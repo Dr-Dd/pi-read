@@ -90,7 +90,7 @@ plan() {
 		[[ $(printf "%s\n" "$out" | head -1) == expires* ]]
 		copy=$(printf "%s\n" "$out" | sed -n 2p | cut -f2)
 		[ "$(cat "$copy")" = "secret value" ]
-		[ "$(stat -c "%u:%g %a" "$copy")" = "1000:1000 400" ]
+		[ "$(stat -c "%u:%g %a" "$copy")" = "0:0 440" ]
 		dir=$(share_dirs)
 		[ -z "$(find "$dir" -name ".filter")" ]
 		[ "$(find "$dir" -type f | wc -l)" -eq 1 ]
@@ -145,7 +145,7 @@ three"
 		[ "$(cat "$copy")" = "one
 [REDACTED]
 three" ]
-		[ "$(stat -c "%u:%g %a" "$copy")" = "1000:1000 400" ]
+		[ "$(stat -c "%u:%g %a" "$copy")" = "0:0 440" ]
 	'
 	echo "$output"
 	[ "$status" -eq 0 ]

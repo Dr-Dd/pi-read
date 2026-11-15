@@ -20,16 +20,17 @@ setup() {
 	[ "$status" -eq 0 ]
 }
 
-@test "sudo: copy is tester-owned 0400, share tree tester-owned 0700, /run/pi-share root 0711" {
+@test "sudo: copy is root-owned 0440 with a tester read ACL, share tree root 0711, /run/pi-share root 0711" {
 	run sandbox '
 		make_file /mnt/data/app/conf "x" 0600
 		share -- /mnt/data/app/conf
 		[ "$rc" -eq 0 ]
 		copy=$(printf "%s\n" "$out" | sed -n 2p | cut -f2)
-		[ "$(stat -c "%u:%g %a" "$copy")" = "1000:1000 400" ]
+		[ "$(stat -c "%u:%g %a" "$copy")" = "0:0 440" ]
+		[[ $(getfacl -cpn "$copy") == *"user:1000:r--"* ]]
 		dir=$(share_dirs)
 		[ "$(find "$dir" -type d | wc -l)" -eq 4 ]
-		[ -z "$(find "$dir" -type d \( ! -uid 1000 -o ! -gid 1000 -o ! -perm 0700 \))" ]
+		[ -z "$(find "$dir" -type d \( ! -uid 0 -o ! -gid 0 -o ! -perm 0711 \))" ]
 		[ "$(stat -c "%u:%g %a" /run/pi-share)" = "0:0 711" ]
 	'
 	echo "$output"

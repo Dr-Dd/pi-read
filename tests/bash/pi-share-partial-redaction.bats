@@ -108,7 +108,7 @@ ROW='row() { printf "@SCAN@/%s\t%s\t%s\t0\t%s\t%s\n" "$1" "$2" "$2" "$(printf "%
 	done
 }
 
-@test "sudo: a finding with its secret replaces only the secret, and the copy stays tester-owned 0400" {
+@test "sudo: a finding with its secret replaces only the secret, and the copy stays root-owned with tester read access" {
 	load sudo-sandbox
 	require_sandbox
 	run sandbox "$ROW"'
@@ -122,7 +122,7 @@ end"
 		[ "$(cat "$copy")" = "user = admin
 password = [REDACTED]
 end" ]
-		[ "$(stat -c "%u:%g %a" "$copy")" = "1000:1000 400" ]
+		[ "$(stat -c "%u:%g %a" "$copy")" = "0:0 440" ]
 		[[ $err == *"gitleaks redacted 1 line(s) in 1 file(s)"* ]]
 	'
 	echo "$output"

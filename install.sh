@@ -143,7 +143,7 @@ ensure_never_share() {
 do_install() {
 	local dir tmp seconds=${1:-${DEFAULT_PASSWORD_TIMEOUT}}
 	dir=$(repo_dir)
-	preflight sudo visudo systemctl systemd-run gitleaks
+	preflight sudo visudo systemctl systemd-run gitleaks setfacl
 
 	tmp=$(mktemp)
 	# shellcheck disable=SC2064 # expand tmp now

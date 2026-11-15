@@ -87,13 +87,13 @@ in_script() {
 	[ "$status" -ne 0 ]
 }
 
-@test "chown only with -h and after the copy loop" {
+@test "no chown, and setfacl only after the copy loop" {
 	run bash -c 'grep -v "^[[:space:]]*#" "$1" | grep -n "chown"' _ "$PI_SHARE"
-	[ "$status" -eq 0 ]
-	[ "$(printf '%s\n' "$output" | wc -l)" -eq 1 ]
-	[[ $output == *"chown -hR"* ]]
-	local copy_line chown_line
+	[ "$status" -eq 1 ]
+	local copy_line grant_line
 	copy_line=$(grep -n 'if ! copy_files' "$PI_SHARE" | cut -d: -f1)
-	chown_line=$(grep -n 'chown -hR' "$PI_SHARE" | tail -1 | cut -d: -f1)
-	[ "$chown_line" -gt "$copy_line" ]
+	grant_line=$(grep -n 'if ! grant_read' "$PI_SHARE" | tail -1 | cut -d: -f1)
+	[ -n "$grant_line" ]
+	[ "$grant_line" -gt "$copy_line" ]
+	[ "$(grep -v "^[[:space:]]*#" "$PI_SHARE" | grep -c "setfacl")" -eq 1 ]
 }
