@@ -80,6 +80,8 @@ Your password always goes to sudo itself, never to the agent or the conversation
 3. **A graphical askpass.** Otherwise, in a graphical session, sudo asks through an askpass program such as `ksshaskpass`.
 4. **Otherwise the request fails**, and the agent is told that no password prompt was available.
 
+On pi's terminal and in the tmux popup, a spinner confirms the password was accepted while pi-share prepares the copies.
+
 Subagents can request files too, through the tmux popup or the askpass. It works, but it is meant for exceptions: prefer letting the main agent ask.
 
 sudo asks every time: pi-read sets `timestamp_timeout=0` for `pi-share`, so no cached sudo session is left for other programs to reuse.

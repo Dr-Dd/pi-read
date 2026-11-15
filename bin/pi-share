@@ -951,6 +951,45 @@ filter_files() {
 	fi
 }
 
+# The spinner shown on the user's terminal while pi-share works (see start_spinner).
+readonly SPINNER_FRAMES=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+SPINNER_PID=""
+
+# start_spinner TEXT: when stdin is a terminal (pi's own, or a tmux popup's), redraw
+# "<frame> TEXT" in place on /dev/tty every 0.1 s until stop_spinner, which an EXIT trap runs on
+# every way out. sudo only starts pi-share once the password is accepted, so this is the user's
+# sign that it was. stdin is not a terminal with the askpass method, where pi's TUI owns the
+# terminal: nothing is drawn then. The spinner writes only to /dev/tty, never to pi-share's
+# stdout or stderr (it closes them, so it never holds pi's pipes open), and ends by itself once
+# pi-share is gone. No terminal to open: no spinner.
+start_spinner() {
+	local text=$1 owner=$$
+	[[ -t 0 ]] || return 0
+	{ : >/dev/tty; } 2>/dev/null || return 0
+	(
+		exec </dev/null >/dev/null 2>&1 3>/dev/tty || exit 0
+		# A pipe nobody writes to: read -t on it waits 0.1 s without a sleep process.
+		exec 4<> <(:) || exit 0
+		local i=0
+		while kill -0 "${owner}" 2>/dev/null; do
+			printf '\r%s %s' "${SPINNER_FRAMES[i % ${#SPINNER_FRAMES[@]}]}" "${text}" >&3 || exit 0
+			i=$((i + 1))
+			read -r -t 0.1 -u 4 || true
+		done
+	) &
+	SPINNER_PID=$!
+	trap stop_spinner EXIT
+}
+
+# stop_spinner: stop the spinner, if any, and clear its line.
+stop_spinner() {
+	[[ -n ${SPINNER_PID} ]] || return 0
+	kill "${SPINNER_PID}" 2>/dev/null || true
+	wait "${SPINNER_PID}" 2>/dev/null || true
+	SPINNER_PID=""
+	{ printf '\r\e[K' >/dev/tty; } 2>/dev/null || true
+}
+
 # unit_expiry UNIT SECONDS STARTED: print the epoch second when UNIT's cleanup removes the copies.
 # systemd counts RuntimeMaxSec from when the unit became active, which is before the copies are
 # made. Ask it for that moment; fall back to STARTED (taken just before the unit was started, so
@@ -1010,6 +1049,11 @@ main() {
 	gid=${SUDO_GID:-}
 	[[ ${uid} =~ ^[1-9][0-9]{0,9}$ && ${gid} =~ ^[1-9][0-9]{0,9}$ ]] ||
 		die "SUDO_UID and SUDO_GID must name a non-root user"
+	if ((list == 1)); then
+		start_spinner "pi-read: password accepted, preparing the listings..."
+	else
+		start_spinner "pi-read: password accepted, preparing the copies..."
+	fi
 	load_never_share "${NEVER_SHARE_LIST}" "${uid}" "${gid}" ||
 		die "cannot use the never-share list ${NEVER_SHARE_LIST}; nothing shared"
 	if [[ -n ${pid} ]]; then
