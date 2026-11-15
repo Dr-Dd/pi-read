@@ -6,9 +6,12 @@
 # This script does only the system step, from pi's copy of the package (or a local clone):
 #
 #   ./install.sh                      install pi-share, its sudoers rule and, when none is
-#                                     installed yet, the default never-share list
+#                                     installed yet, the default never-share list; the password
+#                                     timeout already installed is kept (a first install asks
+#                                     every time)
 #   ./install.sh --password-timeout D the same, with sudo remembering the password for pi-share
-#                                     for D (90, 90s, 2m, 1h; 0, the default, asks every time)
+#                                     for D (90, 90s, 2m, 1h; 0, the default, asks every time);
+#                                     D is kept by later runs without the option
 #   ./install.sh --reset-never-share  replace the never-share list with the shipped defaults
 #   ./install.sh --uninstall          remove all of them but the never-share list
 #   ./install.sh --uninstall --purge  remove the never-share list too
@@ -34,7 +37,7 @@ readonly NEVER_SHARE_DEST=${NEVER_SHARE_DIR}/never-share.list
 # tests/install-source.test.ts checks README.md installs this source as it is.
 readonly PI_SOURCE=git:github.com/Dr-Dd/pi-read
 # How long sudo remembers the password for pi-share, in seconds, unless --password-timeout says
-# otherwise. Not remembered between runs: install.sh writes this default again without the option.
+# otherwise and no rule is installed yet. A rule already installed keeps its timeout.
 # 0: sudo asks every time. A remembered password can be reused, with no question, by a process pi
 # starts in pi's own session (pi.exec()), and every probe restarts the time, so it is opt-in.
 readonly DEFAULT_PASSWORD_TIMEOUT=0
@@ -74,6 +77,22 @@ parse_timeout() {
 		echo "install.sh: the password timeout must be between 0 and 1h: ${spec}" >&2
 		return 1
 	fi
+	echo "${seconds}"
+}
+
+# installed_timeout: print, in seconds, the timeout of the sudoers rule already installed. Fails
+# when there is no rule, or its timestamp_timeout is not one this script wrote.
+installed_timeout() {
+	local rule minutes_spec whole frac seconds
+	rule=$(sudo cat -- "${SUDOERS_DEST}" 2>/dev/null) || return 1
+	[[ ${rule} =~ timestamp_timeout=([0-9]+)(\.([0-9]{1,6}))?, ]] || return 1
+	whole=$((10#${BASH_REMATCH[1]}))
+	frac=${BASH_REMATCH[3]:-0}
+	minutes_spec=${frac}000000
+	frac=$((10#${minutes_spec:0:6}))
+	# Round to the nearest second (20 s is written as 0.333333 minutes).
+	seconds=$((((whole * 1000000 + frac) * 60 + 500000) / 1000000))
+	((seconds <= MAX_PASSWORD_TIMEOUT)) || return 1
 	echo "${seconds}"
 }
 
@@ -146,11 +165,19 @@ ensure_never_share() {
 	fi
 }
 
-# do_install [SECONDS]: install, with sudo remembering the password for SECONDS.
+# do_install [SECONDS]: install, with sudo remembering the password for SECONDS; without it, for
+# the time of the rule already installed, or the default when there is none.
 do_install() {
-	local dir tmp seconds=${1:-${DEFAULT_PASSWORD_TIMEOUT}}
+	local dir tmp seconds=${1-} kept=0
 	dir=$(repo_dir)
 	preflight sudo visudo systemctl systemd-run gitleaks setfacl
+	if [[ -z ${seconds} ]]; then
+		if seconds=$(installed_timeout); then
+			kept=1
+		else
+			seconds=${DEFAULT_PASSWORD_TIMEOUT}
+		fi
+	fi
 
 	tmp=$(mktemp)
 	# shellcheck disable=SC2064 # expand tmp now
@@ -178,7 +205,10 @@ do_install() {
 	else
 		echo "sudo remembers your password for pi-share for ${seconds} seconds."
 	fi
-	echo "Change it with: ${dir}/install.sh --password-timeout DURATION (0 asks every time; pass it again on every run)."
+	if ((kept)); then
+		echo "Kept the password timeout of the installed rule."
+	fi
+	echo "Change it with: ${dir}/install.sh --password-timeout DURATION (0 asks every time); later runs keep it."
 	echo "The pi extension is installed separately: pi install ${PI_SOURCE}"
 	echo "Run ${dir}/install.sh again after every pi update of pi-read."
 	echo "Remove the system files with: ${dir}/install.sh --uninstall"

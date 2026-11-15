@@ -80,3 +80,43 @@ rule_of() {
 	[ "$status" -eq 2 ]
 	[ ! -s "$LOG" ]
 }
+
+# A sudo stub that prints the installed rule for `sudo cat`, when RULE_TEXT is set.
+stub_installed_rule() {
+	printf '#!/usr/bin/env bash\necho "sudo $*" >>"$LOG"\nif [[ $1 == cat ]]; then\n\t[[ -n ${RULE_TEXT-} ]] || exit 1\n\tprintf "%%s\\n" "$RULE_TEXT"\nfi\nexit 0\n' >"$STUBS/sudo"
+}
+
+@test "a plain install keeps the timeout of the installed rule" {
+	stub_installed_rule
+	RULE_TEXT='Defaults!/usr/local/bin/pi-share timestamp_timeout=2, timestamp_type=ppid' run_install
+	[ "$status" -eq 0 ]
+	[[ $output == *"for 120 seconds."* ]]
+	grep -q ' timestamp_timeout=2, ' "$BATS_TEST_TMPDIR/rule"
+	RULE_TEXT='Defaults!/usr/local/bin/pi-share timestamp_timeout=0.333333, timestamp_type=ppid' run_install
+	[[ $output == *"for 20 seconds."* ]]
+}
+
+@test "a plain install keeps 0, which asks every time" {
+	stub_installed_rule
+	RULE_TEXT='Defaults!/usr/local/bin/pi-share timestamp_timeout=0, timestamp_type=ppid' run_install
+	[ "$status" -eq 0 ]
+	[[ $output == *"asks for your password for pi-share every time."* ]]
+	[[ $output == *"Kept the password timeout of the installed rule."* ]]
+}
+
+@test "--password-timeout overrides the installed rule" {
+	stub_installed_rule
+	RULE_TEXT='Defaults!/usr/local/bin/pi-share timestamp_timeout=2, timestamp_type=ppid' run_install --password-timeout 1m
+	[ "$status" -eq 0 ]
+	[[ $output == *"for 60 seconds."* ]]
+}
+
+@test "a missing or unreadable installed rule gives the default, which asks every time" {
+	stub_installed_rule
+	run_install
+	[[ $output == *"asks for your password for pi-share every time."* ]]
+	RULE_TEXT='garbage' run_install
+	[[ $output == *"asks for your password for pi-share every time."* ]]
+	RULE_TEXT='Defaults!/usr/local/bin/pi-share timestamp_timeout=999, timestamp_type=ppid' run_install
+	[[ $output == *"asks for your password for pi-share every time."* ]]
+}

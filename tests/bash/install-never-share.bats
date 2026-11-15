@@ -40,10 +40,10 @@ run_install() {
 	FAIL_sudo='test -e*' run_install
 	[ "$status" -eq 0 ]
 	run grep -E '^sudo ' "$LOG"
-	[ "${lines[1]}" = "sudo test -e $LIST -o -L $LIST" ]
-	[ "${lines[2]}" = "sudo install -d -m 0755 -o root -g root -- /usr/local/etc/pi-read" ]
-	[ "${lines[3]}" = "sudo install -m 0644 -o root -g root -- $REPO/never-share.defaults $LIST" ]
-	[[ ${lines[4]} == "sudo install -m 0440 -o root -g root -- "*" /etc/sudoers.d/pi-read" ]]
+	[ "${lines[2]}" = "sudo test -e $LIST -o -L $LIST" ]
+	[ "${lines[3]}" = "sudo install -d -m 0755 -o root -g root -- /usr/local/etc/pi-read" ]
+	[ "${lines[4]}" = "sudo install -m 0644 -o root -g root -- $REPO/never-share.defaults $LIST" ]
+	[[ ${lines[5]} == "sudo install -m 0440 -o root -g root -- "*" /etc/sudoers.d/pi-read" ]]
 	[ "$(grep -c '^sudo cmp ' "$LOG")" -eq 0 ]
 }
 
@@ -68,7 +68,7 @@ run_install() {
 	FAIL_sudo='@(test -e*|install -m 0644*)' run_install
 	[ "$status" -ne 0 ]
 	[[ $output == *"could not install $LIST"* ]]
-	[ "$(grep -c 'sudoers.d' "$LOG")" -eq 0 ]
+	[ "$(grep -v '^sudo cat ' "$LOG" | grep -c 'sudoers.d')" -eq 0 ]
 }
 
 @test "--reset-never-share installs the defaults over the existing list" {

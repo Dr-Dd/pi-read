@@ -54,18 +54,19 @@ run_install() {
 	run_install
 	[ "$status" -eq 0 ]
 	run grep -nE '^(pi|sudo) ' "$LOG"
-	[[ ${lines[0]} == *"sudo install -m 0755 -o root -g root -- $REPO/bin/pi-share /usr/local/bin/pi-share" ]]
-	[[ ${lines[1]} == *"sudo test -e /usr/local/etc/pi-read/never-share.list -o -L /usr/local/etc/pi-read/never-share.list" ]]
-	[[ ${lines[2]} == *"sudo cmp -s -- $REPO/never-share.defaults /usr/local/etc/pi-read/never-share.list" ]]
-	[[ ${lines[3]} == *"sudo install -m 0440 -o root -g root -- "*" /etc/sudoers.d/pi-read" ]]
-	[[ ${lines[4]} == *"sudo visudo -cq" ]]
-	[ "${#lines[@]}" -eq 5 ]
+	[[ ${lines[0]} == *"sudo cat -- /etc/sudoers.d/pi-read" ]]
+	[[ ${lines[1]} == *"sudo install -m 0755 -o root -g root -- $REPO/bin/pi-share /usr/local/bin/pi-share" ]]
+	[[ ${lines[2]} == *"sudo test -e /usr/local/etc/pi-read/never-share.list -o -L /usr/local/etc/pi-read/never-share.list" ]]
+	[[ ${lines[3]} == *"sudo cmp -s -- $REPO/never-share.defaults /usr/local/etc/pi-read/never-share.list" ]]
+	[[ ${lines[4]} == *"sudo install -m 0440 -o root -g root -- "*" /etc/sudoers.d/pi-read" ]]
+	[[ ${lines[5]} == *"sudo visudo -cq" ]]
+	[ "${#lines[@]}" -eq 6 ]
 }
 
 @test "install: a rule rejected by visudo -cf never installs the sudoers file" {
 	FAIL_visudo='-cqf*' run_install
 	[ "$status" -ne 0 ]
-	! grep -q 'sudoers.d' "$LOG"
+	! grep -v '^sudo cat ' "$LOG" | grep -q 'sudoers.d'
 }
 
 @test "install: a failing sudo visudo -c removes the sudoers file" {
