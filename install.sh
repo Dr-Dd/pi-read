@@ -8,7 +8,7 @@
 #   ./install.sh                      install pi-share, its sudoers rule and, when none is
 #                                     installed yet, the default never-share list
 #   ./install.sh --password-timeout D the same, with sudo remembering the password for pi-share
-#                                     for D (90, 90s, 2m, 1h; 0 asks every time; default 30s)
+#                                     for D (90, 90s, 2m, 1h; 0, the default, asks every time)
 #   ./install.sh --reset-never-share  replace the never-share list with the shipped defaults
 #   ./install.sh --uninstall          remove all of them but the never-share list
 #   ./install.sh --uninstall --purge  remove the never-share list too
@@ -35,7 +35,9 @@ readonly NEVER_SHARE_DEST=${NEVER_SHARE_DIR}/never-share.list
 readonly PI_SOURCE=git:github.com/Dr-Dd/pi-read
 # How long sudo remembers the password for pi-share, in seconds, unless --password-timeout says
 # otherwise. Not remembered between runs: install.sh writes this default again without the option.
-readonly DEFAULT_PASSWORD_TIMEOUT=30
+# 0: sudo asks every time. A remembered password can be reused, with no question, by a process pi
+# starts in pi's own session (pi.exec()), and every probe restarts the time, so it is opt-in.
+readonly DEFAULT_PASSWORD_TIMEOUT=0
 readonly MAX_PASSWORD_TIMEOUT=3600
 # pi-share's own sudo cache, apart from the one every other sudo command uses.
 readonly PI_SHARE_TIMESTAMPDIR=/run/sudo/pi-read
@@ -96,10 +98,15 @@ minutes() {
 # remembers the password for pi-share (0: ask every time). The cache is pi-share's own
 # (timestampdir), so it never lets other commands run without a password and the user's
 # normal sudo cache never approves pi-share; and it belongs to the process that ran sudo
-# (timestamp_type=ppid), so another pi, or a command pi runs, does not reuse it.
+# (timestamp_type=ppid), so another pi does not reuse it, nor a command pi runs in a new session
+# (its bash tool); a process pi runs in its own session (pi.exec()) can.
 sudoers_rule() {
 	local seconds=${1:-${DEFAULT_PASSWORD_TIMEOUT}}
-	echo "# Installed by pi-read's install.sh: sudo remembers the password for pi-share for ${seconds} seconds, for one pi process."
+	if ((seconds == 0)); then
+		echo "# Installed by pi-read's install.sh: sudo asks for the password for pi-share every time."
+	else
+		echo "# Installed by pi-read's install.sh: sudo remembers the password for pi-share for ${seconds} seconds, for one pi process."
+	fi
 	echo "Defaults!${PI_SHARE_DEST} timestamp_timeout=$(minutes "${seconds}"), timestamp_type=ppid, timestampdir=${PI_SHARE_TIMESTAMPDIR}"
 }
 
