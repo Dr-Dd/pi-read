@@ -18,7 +18,6 @@ test("runOnTerminal shows the description and runs sudo without -A", async () =>
 		assert.equal(result.code, 2);
 		assert.equal(result.stderr, "oops\n");
 		assert.deepEqual(result.stdout.trimEnd().split("\n"), [
-			"arg=-k",
 			"arg=-p",
 			`arg=${prompt}`,
 			"arg=--",

@@ -36,7 +36,8 @@ const tool = loadTool();
 const params = { files: ["/etc/x"], reason: "because" };
 const question = "Password to approve (cancel to refuse): ";
 const header = "pi-read: the agent asks to read these root-only files";
-// A fake sudo that saves its -p argument (the third one, after -k [-A] -p) and reports one copy.
+// A fake sudo that saves its -p argument (the second on pi's terminal, after -p; the fourth with
+// askpass, after -k -A -p) and reports one copy.
 const sudoSavingPrompt = (log: string, promptArg: number) =>
 	`#!/bin/sh\nprintf '%s' "$${promptArg}" > '${log}'\nprintf "req\\tcopy\\n"\n`;
 const noPrompt = { TMUX: undefined, DISPLAY: undefined, WAYLAND_DISPLAY: undefined, SUDO_ASKPASS: undefined };
@@ -45,7 +46,7 @@ test("on pi's terminal the request is printed once and sudo asks only the questi
 	const fakes = makeFakes();
 	try {
 		const log = join(fakes.dir, "prompt");
-		fakes.write("sudo", sudoSavingPrompt(log, 3));
+		fakes.write("sudo", sudoSavingPrompt(log, 2));
 		const tui = { stop: () => {}, start: () => {}, requestRender: () => {} };
 		const ctx = {
 			mode: "tui",

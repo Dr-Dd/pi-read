@@ -11,9 +11,33 @@ export interface RunResult {
 	stderr: string;
 }
 
-/** sudo arguments: always ask (-k), our prompt, -A for askpass, then the command. */
-export function sudoArgs(prompt: string, command: string[], askpass = false): string[] {
-	return ["-k", ...(askpass ? ["-A"] : []), "-p", prompt, "--", ...command];
+export interface SudoOptions {
+	/** Ask through SUDO_ASKPASS (-A). */
+	askpass?: boolean;
+	/**
+	 * Let sudo use the password it remembers for pi-share (no -k). Only pi's terminal sets it: there
+	 * pi asks yes/no first when sudo would not ask. The tmux popup and askpass always ask (-k).
+	 */
+	remember?: boolean;
+}
+
+/** sudo arguments: -k unless remember, -A for askpass, our prompt, then the command. */
+export function sudoArgs(prompt: string, command: string[], options: SudoOptions = {}): string[] {
+	return [...(options.remember ? [] : ["-k"]), ...(options.askpass ? ["-A"] : []), "-p", prompt, "--", ...command];
+}
+
+/** What `pi-share --probe` prints. */
+export const PROBE_OUTPUT = "pi-share: probe\n";
+
+/**
+ * Whether sudo still remembers the password for pi-share: `sudo -n pi-share --probe` succeeds and
+ * prints the probe line. Anything else (sudo wants a password, an older pi-share without --probe,
+ * a timeout) counts as not remembered, so sudo asks for the password as usual.
+ */
+export async function sudoRemembers(piShare: string, options: { sudo?: string } = {}): Promise<boolean> {
+	const signal = AbortSignal.timeout(5000);
+	const result = await collect(options.sudo ?? "sudo", ["-n", "--", piShare, "--probe"], { signal });
+	return result.code === 0 && result.stdout === PROBE_OUTPUT;
 }
 
 function collect(
@@ -44,7 +68,7 @@ export function runAskpass(
 	options: { sudo?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
 ): Promise<RunResult> {
 	const env = { ...(options.env ?? process.env), SUDO_ASKPASS: askpass };
-	return collect(options.sudo ?? "sudo", sudoArgs(prompt, command, true), { env, signal: options.signal });
+	return collect(options.sudo ?? "sudo", sudoArgs(prompt, command, { askpass: true }), { env, signal: options.signal });
 }
 
 /**
@@ -52,6 +76,7 @@ export function runAskpass(
  * stdout and stderr are captured. SIGINT from Ctrl+C reaches pi too, so it is ignored meanwhile.
  * No abort signal: spawnSync blocks the event loop, so pi cannot react to one while sudo asks.
  * That costs nothing here: the user is at the prompt, and the command ends when they answer.
+ * sudo may use the password it remembers (no -k): the caller asked yes/no first in that case.
  */
 export function runOnTerminal(
 	description: string,
@@ -64,7 +89,7 @@ export function runOnTerminal(
 	try {
 		process.stdout.write(`\n${description}\n\n`);
 		// spawnSync, not spawn: the ctx.ui.custom callback around this call cannot await.
-		const result = spawnSync(options.sudo ?? "sudo", sudoArgs(prompt, command), {
+		const result = spawnSync(options.sudo ?? "sudo", sudoArgs(prompt, command, { remember: true }), {
 			stdio: ["inherit", "pipe", "pipe"],
 			encoding: "utf8",
 		});

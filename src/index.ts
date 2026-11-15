@@ -6,6 +6,7 @@
 import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { PI_SHARE_PATH } from "./config.ts";
+import { confirmComponent } from "./confirm.ts";
 import { forAgent, forUser, type InstallProblem, installProblem } from "./helper.ts";
 import { choosePromptMethods, findAskpass, type PromptMethod, pathWhich } from "./prompt.ts";
 import {
@@ -29,7 +30,7 @@ import {
 	shareArgs,
 	sudoPrompt,
 } from "./request.ts";
-import { type RunResult, runAskpass, runOnTerminal, runTmuxPopup } from "./run.ts";
+import { type RunResult, runAskpass, runOnTerminal, runTmuxPopup, sudoRemembers } from "./run.ts";
 
 interface Details {
 	method?: PromptMethod;
@@ -86,18 +87,34 @@ function fail(text: string, details: Details = {}) {
 	return { content: [{ type: "text" as const, text }], details, isError: true };
 }
 
+/** The user answered No to the yes/no question; sudo did not run. */
+const REFUSED = "refused";
+
+/**
+ * On pi's terminal, when sudo still remembers the password, it would approve without asking: pi
+ * asks yes/no first instead. Esc, or No, refuses.
+ */
+async function confirmIfRemembered(description: string, ctx: ExtensionToolContext): Promise<boolean> {
+	if (!(await sudoRemembers(PI_SHARE_PATH))) return true;
+	return ctx.ui.custom<boolean>(
+		(tui, theme, _kb, done) => confirmComponent(description, theme, done, () => tui.requestRender()),
+		{ blocked: { kind: "permission", message: "pi-read: approve the request?" } },
+	);
+}
+
 async function runWith(
 	method: PromptMethod,
 	approval: Approval,
 	command: string[],
 	ctx: ExtensionToolContext,
 	signal: AbortSignal | undefined,
-): Promise<RunResult | undefined> {
+): Promise<RunResult | typeof REFUSED | undefined> {
 	// The terminal and the popup print the request once, then sudo asks only the question (also on
 	// a retry after a wrong password). The askpass dialog has to carry the request in its prompt.
 	const { description } = approval;
 	switch (method) {
 		case "tui":
+			if (!(await confirmIfRemembered(description, ctx))) return REFUSED;
 			return ctx.ui.custom<RunResult>((tui, _theme, _kb, done) => {
 				tui.stop();
 				let result: RunResult;
@@ -136,6 +153,7 @@ async function share(
 	for (const method of methods) {
 		const result = await runWith(method, approval, command, ctx, signal);
 		if (!result) continue;
+		if (result === REFUSED) return fail(`The request was refused (${method} confirmation).`, { method });
 		if (result.code !== 0) {
 			const why = result.stderr.trim() || `exit code ${result.code}`;
 			return fail(`The request was refused or failed (${method} prompt):\n${why}`, { method });

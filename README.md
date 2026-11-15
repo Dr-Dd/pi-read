@@ -16,7 +16,7 @@ pi-read sits in between. The agent asks for the files it needs; you see the requ
 ## How it works
 
 1. **The agent asks.** It calls the `request_root_read` tool with the files it wants, how long it needs them, and why.
-2. **You approve.** pi shows you the request (files, duration, reason), then sudo asks for your password (see [Password prompt](#password-prompt)). Typing it approves the request; cancelling refuses it.
+2. **You approve.** pi shows you the request (files, duration, reason), then sudo asks for your password (see [Password prompt](#password-prompt)). Typing it approves the request; cancelling refuses it. On pi's terminal, sudo remembers the password for a short time (30 seconds by default); a request in that time asks Yes or No instead.
 3. **The files are copied and filtered.** A small root-owned script, `pi-share`, copies the files into `/run/pi-share/`, which lives in RAM, and runs [gitleaks](https://github.com/gitleaks/gitleaks) over the copies before anyone can read them: every secret gitleaks flags is replaced with `[REDACTED]` (its whole line when the secret cannot be located safely), so it never reaches the agent (see [Filtering](#filtering)). Only your user can read the copies. No real file is changed.
 4. **The agent reads the copies.** The tool tells the agent where each copy is, and it reads them with its normal tools.
 5. **The copies are deleted** when the time is up, or earlier if pi exits first. Both are enforced by a root systemd service that `pi-share` starts for each share, so they work even if pi crashes, and need no second password. `pi-share` asks that service when it is due and reports the real deadline, which is a little earlier than "now + duration", since the copying takes time. A reboot clears the copies too, because `/run` is emptied on every boot.
@@ -82,7 +82,20 @@ Your password always goes to sudo itself, never to the agent or the conversation
 
 Subagents can request files too, through the tmux popup or the askpass. It works, but it is meant for exceptions: prefer letting the main agent ask.
 
-sudo asks every time: pi-read sets `timestamp_timeout=0` for `pi-share`, so no cached sudo session is left for other programs to reuse.
+**Remembered password.** On pi's own terminal, sudo remembers the password for `pi-share` for 30
+seconds by default; every approved request starts the time again. A request in that time shows the
+request with a **Yes / No** question instead of the password prompt: nothing is selected at first,
+left selects Yes, right selects No, enter confirms, and esc refuses. No refuses without running sudo.
+
+- The remembered password works only for `pi-share`, and only for the pi that it was typed in.
+  Other sudo commands, other pi sessions, subagents and commands the agent runs still ask, and
+  a password you typed for another sudo command does not approve a request. The sudoers rule
+  keeps it in its own directory (`timestampdir=/run/sudo/pi-read`) and ties it to the pi process
+  (`timestamp_type=ppid`).
+- The tmux popup and the graphical askpass always ask for the password: pi cannot ask Yes or No there.
+- Change the time with `install.sh --password-timeout DURATION` (`45s`, `2m`, up to `1h`; `0` asks
+  for the password every time). install.sh does not remember it: pass it again every time you run
+  install.sh, or it goes back to 30 seconds.
 
 ### Limits
 
@@ -90,6 +103,7 @@ sudo asks every time: pi-read sets `timestamp_timeout=0` for `pi-share`, so no c
 | --- | --- |
 | Longest share | 60 minutes (`1h`). Built into `pi-share`; nothing the agent asks for can raise it |
 | Default share | 15 minutes (`15m`) |
+| Password remembered | 30 seconds by default (`install.sh --password-timeout`, `0` to `1h`), on pi's terminal only |
 | Size per share | 50 MB, since the copies use RAM |
 | Listing depth | 10 levels (default 1) |
 | Listing size | 5000 entries per directory, 30 seconds per directory |
@@ -163,7 +177,8 @@ missing and the full path of the `install.sh` to run. The warning only tells you
 
 Update the extension with `pi update --extensions` (or `pi update git:github.com/Dr-Dd/pi-read`), then
 run `~/.pi/agent/git/github.com/Dr-Dd/pi-read/install.sh` again. `pi-share` is a root-owned copy, so it stays
-at the old version until `install.sh` runs again. The extension notices the difference: pi warns you
+at the old version until `install.sh` runs again, and so does the sudoers rule (pass
+`--password-timeout` again if you changed it). The extension notices the difference: pi warns you
 when it starts or after `/reload`, naming the `install.sh` to run, and the extension refuses requests
 until then, telling the agent to ask you for this.
 
@@ -217,6 +232,9 @@ the git source, not next to it), then run `./install.sh` from the clone.
   rule matches, one inside an archive, or one in a file gitleaks skipped (it warns instead of failing
   when it cannot read a file) still reaches the copy.
 - **Secrets missing from the list.** The list blocks known secrets; you still approve every file.
+- **Yes instead of a password.** While sudo remembers your password, answering Yes is enough to approve a
+  request: read it before you answer. `install.sh --password-timeout 0` brings back the password
+  for every request.
 
 ## Roadmap
 

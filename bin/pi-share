@@ -52,6 +52,7 @@ die() {
 usage() {
 	echo "usage: pi-share [--duration DUR] [--pid PID] -- FILE..." >&2
 	echo "       pi-share [--duration DUR] [--pid PID] --list [--depth N] -- DIR..." >&2
+	echo "       pi-share --probe" >&2
 	exit 2
 }
 
@@ -967,6 +968,12 @@ unit_expiry() {
 
 main() {
 	local duration=${DEFAULT_DURATION} pid="" file uid gid started expires gitleaks list=0 depth=""
+	# --probe does nothing: the extension runs it through `sudo -n` to learn whether sudo still
+	# remembers the password, without sharing anything.
+	if (($# == 1)) && [[ $1 == --probe ]]; then
+		echo "pi-share: probe"
+		exit 0
+	fi
 	# Never the caller's PATH: sudo keeps it unless sudoers sets secure_path.
 	PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 	export PATH

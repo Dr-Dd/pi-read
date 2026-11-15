@@ -28,6 +28,11 @@
 #                          systemctl-show or gitleaks; systemctl-show prints
 #                          /mnt/stub/systemctl-show.out
 #   share_dirs             print the share dirs under /run/pi-share (one per line)
+#   use_password_rule [SECONDS]   replace the sandbox sudoers with install.sh's sudoers_rule
+#                          SECONDS (pi-share at /mnt/bin/pi-share) and let tester run
+#                          /mnt/bin/pi-share and /usr/bin/true with a password; PAM then logs each
+#                          authentication to /mnt/log/pam and succeeds
+#   auth_count             print how many authentications PAM logged
 #   stub_log NAME          print what a stub logged: its arguments (one call per line) or, for
 #                          gitleaks-scan, the names in each directory it was given
 
@@ -45,11 +50,13 @@ require_sandbox() {
 
 # sandbox SNIPPET: run SNIPPET as root of a fresh sandbox (see the top of this file).
 sandbox() {
-	local pi_share
+	local pi_share install
 	# shellcheck disable=SC2154 # set by bats
 	pi_share=$(realpath -e -- "${BATS_TEST_DIRNAME}/../../bin/pi-share")
+	install=$(realpath -e -- "${BATS_TEST_DIRNAME}/../../install.sh")
 	# shellcheck disable=SC2016 # expanded by the inner bash
 	unshare --map-auto --map-root-user --mount --pid --fork --mount-proc \
+		env SANDBOX_INSTALL="${install}" \
 		bash -c 'set -e; source "$1"; sandbox_setup "$2"; sandbox_eval "$3"' _ \
 		"${SANDBOX_HELPER}" "${pi_share}" "$1"
 }
@@ -88,7 +95,7 @@ sandbox_setup() {
 	cat >"${s}/etc/sudoers" <<-'EOF'
 		# Sandbox placeholder for the pi-share rule from install.sh.
 		Defaults !lecture
-		Defaults!/mnt/bin/pi-share timestamp_timeout=0
+		Defaults!/mnt/bin/pi-share timestamp_timeout=0.5, timestamp_type=ppid, timestampdir=/run/sudo/pi-read
 		root ALL=(ALL:ALL) NOPASSWD: ALL
 		tester ALL=(root) NOPASSWD: /mnt/bin/pi-share
 	EOF
@@ -202,5 +209,32 @@ share_dirs() {
 stub_log() {
 	if [[ -f /mnt/log/$1 ]]; then
 		cat -- "/mnt/log/$1"
+	fi
+}
+
+use_password_rule() {
+	local rule
+	# shellcheck disable=SC2016 # expanded by the inner bash
+	rule=$(bash -c 'source "$1" && sudoers_rule "$2"' _ "${SANDBOX_INSTALL}" "${1:-30}")
+	{
+		echo 'Defaults !lecture'
+		printf '%s\n' "${rule//\/usr\/local\/bin\/pi-share//mnt/bin/pi-share}"
+		echo 'root ALL=(ALL:ALL) NOPASSWD: ALL'
+		echo 'tester ALL=(root) /mnt/bin/pi-share, /usr/bin/true'
+	} >/mnt/etc/sudoers
+	printf '%s\n' '#!/bin/sh' 'echo "auth $PAM_USER" >>/mnt/log/pam' >/mnt/stub/pam-auth
+	chmod 0755 /mnt/stub/pam-auth
+	# pam_exec runs the hook as the user who authenticates, so it creates the log itself
+	# (/mnt/log is writable by everyone).
+	rm -f /mnt/log/pam
+	printf '%s\n' 'auth required pam_exec.so /mnt/stub/pam-auth' 'account sufficient pam_permit.so' \
+		'session sufficient pam_permit.so' >/mnt/etc/pam-sudo
+}
+
+auth_count() {
+	if [[ -f /mnt/log/pam ]]; then
+		wc -l </mnt/log/pam
+	else
+		echo 0
 	fi
 }
