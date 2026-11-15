@@ -152,8 +152,6 @@ require_gitleaks() {
 # has_control_char PATH: succeed when PATH holds a control character (tab, newline, escape, ...).
 # Such a path would break pi-share's tab-separated output (and its own "path<TAB>size" protocol).
 has_control_char() {
-	# shellcheck disable=SC2034 # LC_ALL is read by the pattern match below
-	local LC_ALL=C
 	[[ $1 == *[[:cntrl:]]* ]]
 }
 
@@ -657,7 +655,6 @@ copy_files() {
 # report_text FILE: the first line of FILE, control characters removed and cut short, so a
 # gitleaks message can be appended to one of pi-share's own error lines.
 report_text() {
-	local LC_ALL=C
 	head -n 1 -- "$1" 2>/dev/null | tr -d '[:cntrl:]' | cut -c1-200
 }
 
@@ -728,7 +725,6 @@ plan_redactions() {
 # whole line, when a SECRET is empty or not in its MATCH, a MATCH is not on LINE, or a SECRET is
 # still in the result.
 redact_line() {
-	local LC_ALL=C
 	local line=$1 secret match pos rest pre from to out="" last=0 i
 	shift
 	local -a secrets=() ranges=()
@@ -772,7 +768,6 @@ redact_line() {
 # decode_b64 B64 FILE: decode B64 into FILE and print it; fail when it does not decode or holds a
 # NUL byte or a newline, which bash cannot carry through a variable or sed through one line.
 decode_b64() {
-	local LC_ALL=C
 	printf '%s' "$1" | base64 -d >"$2" 2>/dev/null || return 1
 	[[ $(tr -d '\000\n' <"$2" | wc -c) == "$(wc -c <"$2")" ]] || return 1
 	cat -- "$2"
@@ -781,7 +776,6 @@ decode_b64() {
 # partial_sed FILE LINE TMP SECRET MATCH...: print the sed command that replaces only the secrets
 # (base64) on line LINE of FILE, or fail so the caller replaces the whole line. TMP is scratch.
 partial_sed() {
-	local LC_ALL=C
 	local file=$1 n=$2 tmp=$3 text new value
 	shift 3
 	local -a args=()
@@ -1013,6 +1007,8 @@ main() {
 		echo "pi-share: probe"
 		exit 0
 	fi
+	# sudo keeps the caller's LANG and LC_*; byte-wise matching and sorting must not depend on them.
+	export LC_ALL=C
 	# Never the caller's PATH: sudo keeps it unless sudoers sets secure_path.
 	PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 	export PATH
