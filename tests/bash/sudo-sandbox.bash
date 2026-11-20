@@ -9,6 +9,9 @@
 #     /usr/libexec/sudo then /usr/lib/sudo, that holds sudoers.so; none fails the test);
 #   - bind-mounts sandbox /etc/passwd, /etc/group, /etc/sudoers, /etc/sudo.conf and
 #     /etc/pam.d/sudo (pam_permit: no password) and an empty /etc/sudoers.d;
+#   - bind-mounts a files-only /etc/nsswitch.conf and an /etc/hosts that maps this host's name
+#     to 127.0.0.1: sudo resolves the host name, and through DNS (as on CI runners) a failed
+#     lookup prints "sudo: unable to resolve host" on stderr;
 #   - mounts a fresh tmpfs on /run, so /run/pi-share starts out absent;
 #   - mount -t tmpfs on /usr/local with a root-owned gitleaks stub at /usr/local/bin/gitleaks: it
 #     logs each call and the names in the directory it is given, prints /mnt/stub/gitleaks.out with
@@ -119,7 +122,9 @@ sandbox_setup() {
 	: >"${s}/etc/sudo.conf"
 	printf '%s\n' 'auth sufficient pam_permit.so' 'account sufficient pam_permit.so' \
 		'session sufficient pam_permit.so' >"${s}/etc/pam-sudo"
-	for f in passwd group sudoers sudo.conf; do
+	printf '%s\n' 'passwd: files' 'group: files' 'shadow: files' 'hosts: files' >"${s}/etc/nsswitch.conf"
+	printf '%s\n' "127.0.0.1 localhost $(uname -n)" '::1 localhost' >"${s}/etc/hosts"
+	for f in passwd group sudoers sudo.conf nsswitch.conf hosts; do
 		mount --bind "${s}/etc/${f}" "/etc/${f}"
 	done
 	mount --bind "${s}/etc/pam-sudo" /etc/pam.d/sudo
