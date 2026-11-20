@@ -28,6 +28,9 @@
  *     Changes reverted when the agent stops are reported to the model with the user's next message.
  *   The approval dialog shows the full diff (scrollable in the TUI; `c` toggles the whole file).
  *   PI_CHECK_DIFF_CONTEXT sets the context lines (default 4).
+ * - Output: a passing check returns only that it passed; a failing one returns only its failing
+ *   steps (head and tail of each, see summary.ts). `verbose: true` returns the whole output
+ *   (still truncated to its last lines).
  * - The check is stopped after `checkTimeoutSeconds` (.pi/check-guard.json, default 600; 0 turns
  *   the timeout off) and counts as a failure. Stopping kills check.sh's whole process group.
  * - Unknown keys in .pi/check-guard.json are reported to the user (and otherwise ignored).
@@ -50,6 +53,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { failingSteps } from "./summary.ts";
 
 /** The project check script run by the `check` tool. */
 const CHECK_FILE = "check.sh";
@@ -65,8 +69,8 @@ const KILL_GRACE_MS = 5000;
 const PIPE_GRACE_MS = 1000;
 /** Output kept from a check run (the tail). */
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
-/** strictFiles when the config does not set them: the check, the worktree setup and the agent's own instructions. */
-const DEFAULT_STRICT: readonly string[] = ["check.sh", "worktree-setup.sh", "AGENTS.md", ".pi/settings.json", ".pi/agents/**", ".pi/prompts/**"];
+/** strictFiles when the config does not set them: the check, the worktree setup, the agent's own instructions and the workflow reminder. */
+const DEFAULT_STRICT: readonly string[] = ["check.sh", "worktree-setup.sh", "AGENTS.md", ".pi/settings.json", ".pi/agents/**", ".pi/prompts/**", ".pi/extensions/workflow-reminder/**"];
 /** vulnerableFiles when the config does not set them: pi's installed packages, which pi itself rewrites. */
 const DEFAULT_VULNERABLE: readonly string[] = [".pi/npm", ".pi/git"];
 /** Always guarded, and creating them also needs approval: the guard's own configuration and code. */
@@ -76,7 +80,7 @@ const ALWAYS_GUARDED: readonly string[] = [CONFIG_FILE, ".pi/extensions/check-gu
 const ALLOWED_SUBAGENT_ACTIONS = new Set(["status", "interrupt", "stop", "list", "get", "guide"]);
 
 // Agents the workflow uses for direct launches.
-const ALLOW_SUBAGENT_AGENTS = new Set(["scout", "reviewer", "oracle"]);
+const ALLOW_SUBAGENT_AGENTS = new Set(["reviewer"]);
 // Fields that make a call launch other or several agents (scripts, parallel tasks, chains).
 const SUBAGENT_MULTI_LAUNCH_FIELDS: readonly string[] = ["workflow", "tasks", "chain"];
 
@@ -836,10 +840,16 @@ export default function (pi: ExtensionAPI) {
 		label: "Check",
 		description:
 			"Run the project check (./check.sh: tests, type checks, linters and whatever else the project configured). " +
-			"Fails with the output of every failing step.",
-		parameters: Type.Object({}),
+			"On success it returns only that the check passed; on failure, the output of the failing steps. " +
+			"Set verbose to get the full output.",
+		parameters: Type.Object({
+			verbose: Type.Optional(
+				Type.Boolean({ description: "Return the full output of every step, passing ones included. Default false." }),
+			),
+		}),
 		executionMode: "sequential",
-		async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			const verbose = params.verbose === true;
 			const { reverted, failed } = await gate(ctx);
 			if (reverted.length || failed.length) {
 				const notes: string[] = [];
@@ -857,16 +867,22 @@ export default function (pi: ExtensionAPI) {
 			const result = await runCheck(file, ctx.cwd, timeout, signal);
 			if (result.cancelled) return fail("Check cancelled.", { exitCode: result.code });
 
-			const t = truncateTail(result.output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
-			let out = t.truncated ? `[output truncated to the last ${t.outputLines} lines]\n${t.content}` : t.content;
+			const passed = result.code === 0 && !result.timedOut;
+			const full = () => {
+				const t = truncateTail(result.output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+				return t.truncated ? `[output truncated to the last ${t.outputLines} lines]\n${t.content}` : t.content;
+			};
 
-			if (result.code === 0 && !result.timedOut) {
+			if (passed) {
 				failures = 0;
 				return {
-					content: [{ type: "text", text: `${out}\n\nCheck passed (exit 0).` }],
+					content: [{ type: "text", text: verbose ? `${full()}\n\nCheck passed (exit 0).` : "Check passed (exit 0)." }],
 					details: { exitCode: 0, failures },
 				};
 			}
+
+			const steps = verbose ? undefined : failingSteps(result.output);
+			let out = steps === undefined ? full() : steps;
 
 			failures++;
 			const limit = maxFailures();
